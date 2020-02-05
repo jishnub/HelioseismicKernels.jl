@@ -1,0 +1,13 @@
+name = "HelioseismicTimeDistanceSensitivityKernels"
+uuid = "3a63082f-2cd8-4ac6-a757-0d154b5e16eb"
+authors = ["Jishnu Bhattacharya", "Center for Space Science", "New York University Abu Dhabi"]
+version = "0.1.0"
+
+[compat]
+julia = "1"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
