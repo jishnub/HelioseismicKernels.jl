@@ -15,6 +15,11 @@ class Point():
         self.artist.remove()
         self.artist=None
 
+'''
+    Shift + click to create points, 
+    press c to finalize the curve, 
+    press d to delete the curve
+'''
 class Poly():
     def __init__(self):
         self.points=[]
@@ -40,6 +45,7 @@ class Poly():
         #~ Update fitted curve
         if self.fitted_curve is not None: self.fitted_curve.remove()
         self.fitted_curve,=plt.plot(phi,fit_t,'g')
+        plt.ylim(0,t_max)
 
         #~ String to format fitted polynomial like p_2*k**2 + p_1*k +  p_0
         fmtstr=" + ".join(["{}*phi^"+str(i) if i>1 else "{}*phi" if i==1 else "{}"  for i in range(len(pfit))[::-1]])
@@ -115,17 +121,17 @@ class Track_interactions():
         if event.key=='shift':
             self.shift_pressed = False
 
-
-data=np.squeeze(fits.open('C_phi_t.fits')[0].data)
+filename="/home/jishnu/kernels_scratch/kernels/C_phi_t.fits"
+data=np.squeeze(fits.open(filename)[0].data)
 
 nt,nphi=data.shape
 
 dnu = 2e-6; T=1/dnu; dt=T/nt;
 
 phi=np.linspace(0,2*np.pi,nphi)
-t=np.arange(nt)*dt / 3600
+t=np.arange(nt)*dt
 
-t_max = 6
+t_max = 2*3600
 t = t[t<=t_max]
 
 phi_max = np.pi
@@ -138,7 +144,7 @@ data = data[np.ix_(t<=t_max,phi<=phi_max)]
 
 figure=plt.figure()
 
-plt.pcolormesh(phi,t,data/abs(data).max(),cmap='Greys',vmax=0.6)
+plt.pcolormesh(phi,t,data/abs(data).max(),cmap='Greys',vmax=0.1, vmin=-0.1)
 
 _=Track_interactions(figure)
 
