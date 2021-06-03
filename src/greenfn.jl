@@ -57,7 +57,7 @@ function read_Gfn_file_at_index!(G::AbstractArray{<:Complex},
 
 	proc_id_mode, ℓω_index_in_file = ParallelUtilities.whichproc_localindex((ℓ_arr, ω_ind_arr), ℓω, num_procs)
 	G_file = G_fits_dict[proc_id_mode].hdu
-	read_Gfn_file_at_index!(G, G_file, ℓω_index_in_file, I...)
+	read_Gfn_file_at_index!(G, G_file, I..., ℓω_index_in_file)
 end
 
 _maybetoreim(I1::Colon) = I1
@@ -68,46 +68,29 @@ function _reimindices(I)
 	return ind1, Itrailing
 end
 
-function read_Gfn_file_at_index!(G::AbstractArray{<:Any,0}, G_hdu::ImageHDU, ℓω_index_in_file::Integer, I::Integer...)
+function read_Gfn_file_at_index!(G::AbstractArray{<:Any,0}, G_hdu::ImageHDU, I...)
 	G1D = reshape(G, 1)
 	ind1, Itrailing = _reimindices(I)
-	read!(G_hdu, reinterpret_as_float(G1D), ind1, Itrailing..., ℓω_index_in_file)
+	read!(G_hdu, reinterpret_as_float(G1D), ind1, Itrailing...)
 	return G
 end
-function read_Gfn_file_at_index!(G, G_hdu::ImageHDU, ℓω_index_in_file::Integer, I...)
+function read_Gfn_file_at_index!(G, G_hdu::ImageHDU, I...)
 	ind1, Itrailing = _reimindices(I)
-	read!(G_hdu, reinterpret_as_float(G), ind1, Itrailing..., ℓω_index_in_file)
+	read!(G_hdu, reinterpret_as_float(G), ind1, Itrailing...)
 	return G
 end
-
-function read_Gfn_file_at_index!(G, G_file::FITS, ℓω_index_in_file::Integer, I...)
-	read_Gfn_file_at_index!(G, G_file[1], ℓω_index_in_file, I...)
-end
-
-# function read_Gfn_file_at_index(G_fits_dict::Dict,
-# 	(ℓ_arr, ω_ind_arr)::NTuple{2,AbstractUnitRange},
-# 	ℓω::Tuple, num_procs::Integer, I...)
-
-# 	proc_id_mode, ℓω_index_in_file = ParallelUtilities.whichproc_localindex((ℓ_arr, ω_ind_arr), ℓω, num_procs)
-# 	G_file = G_fits_dict[proc_id_mode].fits
-# 	read_Gfn_file_at_index(G_file, ℓω_index_in_file, I...)
-# end
 
 function read_Gfn_file_at_index(G_file::Union{FITS, ImageHDU},
 	(ℓ_arr, ω_ind_arr)::NTuple{2, AbstractUnitRange},
 	ℓω::NTuple{2, Int}, num_procs::Integer, I...)
 
 	_, ℓω_index_in_file = ParallelUtilities.whichproc_localindex((ℓ_arr, ω_ind_arr), ℓω, num_procs)
-	read_Gfn_file_at_index(G_file, ℓω_index_in_file, I...)
+	read_Gfn_file_at_index(G_file, I..., ℓω_index_in_file)
 end
 
-function read_Gfn_file_at_index(G_file::FITS, ℓω_index_in_file::Integer, I...)
-	read_Gfn_file_at_index(G_file[1], ℓω_index_in_file, I...)
-end
-
-function read_Gfn_file_at_index(G_hdu::ImageHDU, ℓω_index_in_file::Integer, I...)
-	G = read(G_hdu, I..., ℓω_index_in_file)
-	reinterpret(ComplexF64, G)
+function read_Gfn_file_at_index(G_hdu::ImageHDU, I...)
+	G = read(G_hdu, I...)
+	reinterpret_as_complex(G)
 end
 
 function Gfn_fits_files(path::String, proc_id_range::AbstractUnitRange)

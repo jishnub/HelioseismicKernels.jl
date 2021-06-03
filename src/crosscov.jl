@@ -157,17 +157,22 @@ function biposh_spheroidal(Y::SVector{9,<:Number})
 	OffsetArray(SMatrix{2,2}(T00, T10, T01, T11), 0:1, 0:1)
 end
 
-function los_projected_biposh_spheroidal(computeY, xobs1, xobs2::SphericalPoint, los, ℓ_range)
+function los_projected_biposh_spheroidal(computeY, xobs1, xobs2::SphericalPoint, los, ℓ_range::AbstractUnitRange)
 	_Y12 = computeY(los, xobs1, xobs2, ℓ_range)
 	l1, l2 = line_of_sight_covariant.((xobs1, xobs2), los)
 	biposh_spheroidal(los_projected_biposh(los, _Y12, l1, l2))
 end
-function los_projected_biposh_spheroidal(computeY, nobs1, nobs2_arr::Vector{<:SphericalPoint}, los, ℓ_range)
+function los_projected_biposh_spheroidal(computeY, nobs1, nobs2_arr::Vector{<:SphericalPoint}, los, ℓ_range::AbstractUnitRange)
 	l1 = line_of_sight_covariant(nobs1, los)
 	l2arr = line_of_sight_covariant.(nobs2_arr, los)
 	_Y12 = computeY.(los, nobs1, nobs2_arr, (ℓ_range,))
 	OffsetArray(permutedims(reduce(hcat,
 	biposh_spheroidal.(los_projected_biposh.(los, _Y12, (l1,), l2arr)))), :, ℓ_range)
+end
+
+function los_projected_biposh_spheroidal(computeY, xobs1, xobs2, los, ℓ_ωind_iter_on_proc::ProductSplit)
+	ℓ_range = UnitRange(extremaelement(ℓ_ωind_iter_on_proc, dims = 1)...)
+	los_projected_biposh_spheroidal(computeY, xobs1, xobs2, los, ℓ_range)
 end
 
 ########################################################################################
@@ -640,7 +645,10 @@ function CΔϕω_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit,
 
 	Cϕω_arr = zeros(ComplexF64, nϕ, ν_ind_range)
 
-	Pl_cosχ = permutedims(computeY₀₀.(los, Point2D(pi/2, 0), Point2D.(pi/2, Δϕ_arr), (ℓ_arr,)))
+	ℓ_range = UnitRange(extremaelement(ℓ_ωind_iter_on_proc, dims = 1)...)
+	n1 = Point2D(pi/2, 0)
+	n2_arr = Point2D.(pi/2, Δϕ_arr)
+	Y12 = los_projected_biposh_spheroidal(computeY₀₀, n1, n2_arr, los, ℓ_range)
 
 	@unpack α_r₁, α_r₂ = allocateGfn(los, r₁_ind == r₂_ind)
 
@@ -656,95 +664,31 @@ function CΔϕω_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit,
 		end
 
 		for ϕ_ind in 1:nϕ
-			Cϕω_arr[ϕ_ind, ω_ind] += Cωℓ(los_radial(), ω, ℓ, α_r₁, α_r₂, Pl_cosχ[ϕ_ind, ℓ])
+			Cϕω_arr[ϕ_ind, ω_ind] += Cωℓ(los_radial(), ω, ℓ, α_r₁, α_r₂, Y12[ϕ_ind, ℓ])
 		end
 	end
 	closeGfnfits(Gfn_fits_files_src)
 	parent(Cϕω_arr)
-end
-
-function CΔϕω_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit,
-	xobs1::Point3D, r₂, ::los_earth, Δϕ_arr, p_Gsrc::Union{Nothing, ParamsGfn} = nothing,
-	r_src = r_src_default, c_scale = 1)
-
-	p_Gsrc = read_all_parameters(p_Gsrc, r_src = r_src, c_scale = c_scale)
-
-	Gfn_path_src, NGfn_files_src = p_Gsrc.path, p_Gsrc.num_procs
-	@unpack ℓ_arr, Nν_Gfn = p_Gsrc
-
-	_, ν_ind_range = ParallelUtilities.getiterators(ℓ_ωind_iter_on_proc)
-
-	r₁_ind, r₂_ind = radial_grid_index.((xobs1, r₂))
-
-	nϕ = length(Δϕ_arr)
-
-	Gfn_fits_files_src = Gfn_fits_files(Gfn_path_src, (ℓ_arr, 1:Nν_Gfn),
-						ℓ_ωind_iter_on_proc, NGfn_files_src)
-
-	Cϕω_arr = zeros(ComplexF64, nϕ, ν_ind_range)
-
-	# covariant components
-	ℓ_ωind_iter_on_proc = sort(collect(ℓ_ωind_iter_on_proc))
-
-	xobs2_arr = [Point3D(r₂, xobs1.θ, xobs1.ϕ + Δϕ) for Δϕ in Δϕ_arr]
-
-	_Y12 = computeY₀₀.(los, nobs1, nobs2_arr, (ℓ_range,))
-
-	# covariant components
-	l1 = line_of_sight_covariant(xobs1, los)
-	l2 = line_of_sight_covariant.(xobs2_arr, los)
-
-	Y12 = OffsetArray(permutedims(reduce(hcat,
-	biposh_spheroidal.(los_projected_biposh.(los, _Y12, (l1,), l2)))), :, ℓ_range)
-
-	for (ℓ, ω_ind) in ℓ_ωind_iter_on_proc
-		ω = ω_arr[ω_ind]
-
-		α_r₁ = read_Gfn_file_at_index(Gfn_fits_files_src,
-			ℓ_arr, 1:Nν_Gfn, (ℓ, ω_ind), NGfn_files_src, r₁_ind, 1:2, 1, 1)
-		α_r₂ = α_r₁
-		if r₁_ind != r₂_ind
-			α_r₂ = read_Gfn_file_at_index(Gfn_fits_files_src,
-			ℓ_arr, 1:Nν_Gfn, (ℓ, ω_ind), NGfn_files_src, r₂_ind, 1:2, 1, 1)
-		end
-
-
-		for (ϕ_ind, ϕ) in enumerate(Δϕ_arr)
-			Y12ℓ = Y12[ϕ_ind, ℓ]
-			for β in 0:1, α in 0:1
-				Cϕω_arr[ϕ_ind, ω_ind] += ω^2 * Powspec(ω) *
-										conj(α_r₁[α]) * α_r₂[β] * Y12ℓ[α, β]
-			end
-		end
-	end
-	closeGfnfits(Gfn_fits_files_src)
-	parent(Cϕω_arr)
-end
-
-function _CΔϕω(comm, args...; kwargs...)
-	r_src, _, c_scale = read_rsrc_robs_c_scale(kwargs)
-	p_Gsrc = read_all_parameters(; kwargs...)
-	@unpack Nν_Gfn, ν_arr, ℓ_arr, ν_start_zeros, ν_end_zeros = p_Gsrc
-	iters = ℓ_and_ν_range(ℓ_arr, ν_arr; kwargs...)
-	lmax = maximum(ℓ_range)
-
-	Δϕ_arr = get(kwargs, :Δϕ_arr, LinRange(0, π, lmax+1)[1:end-1])
-
-	Cω_in_range = pmapsum(comm, CΔϕω_partial, iters,
-			args..., Δϕ_arr, p_Gsrc, r_src, c_scale)
-
-	Cω_in_range === nothing && return nothing
-	ν_ind_range = last(iters)
-	return pad_zeros_ν(Cω_in_range, ν_ind_range, Nν_Gfn, ν_start_zeros, ν_end_zeros, 2)
 end
 
 function CΔϕω(comm, r₁ = r_obs_default, r₂ = r_obs_default,
 	los::los_radial = los_radial(); kwargs...)
-	CΔϕω = _CΔϕω(comm, r₁, r₂, los; kwargs...)
-	CΔϕω === nothing && return nothing
+	r_src, _, c_scale = read_rsrc_robs_c_scale(kwargs)
+	p_Gsrc = read_all_parameters(; kwargs...)
+	@unpack Nν_Gfn, ν_arr, ℓ_arr, ν_start_zeros, ν_end_zeros = p_Gsrc
+	ℓ_range,ν_ind_range = ℓ_and_ν_range(ℓ_arr, ν_arr; kwargs...)
+	lmax = maximum(ℓ_range)
+
+	Δϕ_arr = get(kwargs, :Δϕ_arr, LinRange(0, π, lmax+1)[1:end-1])
+
+	Cω_in_range = pmapsum(comm, CΔϕω_partial, (ℓ_range, ν_ind_range),
+			r₁, r₂, los, Δϕ_arr, p_Gsrc, r_src, c_scale)
+
+	Cω_in_range === nothing && return nothing
+	CΔϕω = pad_zeros_ν(Cω_in_range, ν_ind_range, Nν_Gfn, ν_start_zeros, ν_end_zeros, 2)
 	if get(kwargs, :save, true)
 		filename = joinpath(SCRATCH_kerneldir[], "CΔϕω.fits")
-		FITSIO.fitswrite(filename, CΔϕω)
+		FITSIO.fitswrite(filename, reinterpret_as_float(CΔϕω))
 	end
 	return CΔϕω
 end

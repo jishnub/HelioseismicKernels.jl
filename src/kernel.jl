@@ -142,8 +142,7 @@ function kernel_ℑu⁺₁₀_partial(localtimer, ℓ_ωind_iter_on_proc::Produc
 	arrs = allocatearrays(Flow(), los, r₁_ind == r₂_ind)
 	@unpack Gsrc, Gobs1, Gobs2, G¹₁jj_r₁, G¹₁jj_r₂, H¹₁jj_r₁r₂, H¹₁jj_r₂r₁ = arrs
 
-	ℓ_range = UnitRange(extremaelement(ℓ_ωind_iter_on_proc, dims = 1)...)
-	Y12 = los_projected_biposh_spheroidal(computeY₁₀, xobs1, xobs2, los, ℓ_range)
+	Y12 = los_projected_biposh_spheroidal(computeY₁₀, xobs1, xobs2, los, ℓ_ωind_iter_on_proc)
 
 	for (j, ω_ind) in ℓ_ωind_iter_on_proc
 		ω = ω_arr[ω_ind]
@@ -208,8 +207,7 @@ function kernel_ℑu⁺₁₀_partial(localtimer, ℓ_ωind_iter_on_proc::Produc
 	arrs = allocatearrays(Flow(), los, true)
 	@unpack Gsrc, H¹₁jj_r₁r₂, G¹₁jj_r₁, Gobs1 = arrs
 
-	ℓ_range = UnitRange(extremaelement(ℓ_ωind_iter_on_proc, dims = 1)...)
-	Y12 = los_projected_biposh_spheroidal(computeY₁₀, nobs1, nobs2_arr, los, ℓ_range)
+	Y12 = los_projected_biposh_spheroidal(computeY₁₀, nobs1, nobs2_arr, los, ℓ_ωind_iter_on_proc)
 
 	for (ℓ, ω_ind) in ℓ_ωind_iter_on_proc
 		ω = ω_arr[ω_ind]
@@ -236,8 +234,14 @@ function kernel_ℑu⁺₁₀_partial(localtimer, ℓ_ωind_iter_on_proc::Produc
 	return @. (ρ/r)*K
 end
 
-# Feeder function
-function _K_ℑu⁺₁₀(comm, m::SeismicMeasurement, xobs1, xobs2, los::los_direction, args...; kwargs...)
+# Traveltimes
+
+kernelfilenameℑu⁺₁₀(::TravelTimes, ::los_radial) = "K_δτ_ℑu⁺₁₀.fits"
+kernelfilenameℑu⁺₁₀(::TravelTimes, ::los_earth) = "K_δτ_ℑu⁺₁₀_los.fits"
+kernelfilenameℑu⁺₁₀(::Amplitudes, ::los_radial) = "K_A_ℑu⁺₁₀.fits"
+kernelfilenameℑu⁺₁₀(::Amplitudes, ::los_earth) = "K_A_ℑu⁺₁₀_los.fits"
+
+function kernel_ℑu⁺₁₀(comm, m::SeismicMeasurement, xobs1, xobs2, los::los_direction = los_radial(); kwargs...)
 	r_src, r_obs = read_rsrc_robs_c_scale(kwargs)
 	p_Gsrc, p_Gobs1, p_Gobs2 = read_parameters_for_points(xobs1, xobs2; kwargs...)
 	@unpack ν_arr, ℓ_arr = p_Gsrc
@@ -250,19 +254,9 @@ function _K_ℑu⁺₁₀(comm, m::SeismicMeasurement, xobs1, xobs2, los::los_di
 	end
 
 	# Use the window function to compute the kernel
-	pmapsum(comm, kernel_ℑu⁺₁₀_partial, iters,
-		xobs1, xobs2, los, args..., hω_arr, p_Gsrc, p_Gobs1, p_Gobs2, r_src, r_obs)
-end
+	K = pmapsum(comm, kernel_ℑu⁺₁₀_partial, iters,
+		xobs1, xobs2, los, hω_arr, p_Gsrc, p_Gobs1, p_Gobs2, r_src, r_obs)
 
-# Traveltimes
-
-kernelfilenameℑu⁺₁₀(::TravelTimes, ::los_radial) = "K_δτ_ℑu⁺₁₀.fits"
-kernelfilenameℑu⁺₁₀(::TravelTimes, ::los_earth) = "K_δτ_ℑu⁺₁₀_los.fits"
-kernelfilenameℑu⁺₁₀(::Amplitudes, ::los_radial) = "K_A_ℑu⁺₁₀.fits"
-kernelfilenameℑu⁺₁₀(::Amplitudes, ::los_earth) = "K_A_ℑu⁺₁₀_los.fits"
-
-function kernel_ℑu⁺₁₀(comm, m::SeismicMeasurement, xobs1, xobs2, los::los_direction = los_radial(); kwargs...)
-	K = _K_ℑu⁺₁₀(comm, m, xobs1, xobs2, los; kwargs...)
 	K === nothing && return nothing
 
 	if get(kwargs, :save, true)
@@ -1251,8 +1245,7 @@ function kernel_δc₀₀_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSpl
 	fjj_r₁_rsrc, fjj_r₂_rsrc = arr.fjₒjₛ_r₁_rsrc, arr.fjₒjₛ_r₂_rsrc
 	H¹₁jj_r₁r₂, H¹₁jj_r₂r₁ = arr.Hjₒjₛω_r₁r₂, arr.Hjₒjₛω_r₂r₁
 
-	ℓ_range = UnitRange(extremaelement(ℓ_ωind_iter_on_proc, dims = 1)...)
-	Y12 = los_projected_biposh_spheroidal(computeY₀₀, xobs1, xobs2, los, ℓ_range)
+	Y12 = los_projected_biposh_spheroidal(computeY₀₀, xobs1, xobs2, los, ℓ_ωind_iter_on_proc)
 
 	for (ℓ, ω_ind) in ℓ_ωind_iter_on_proc
 		ω = ω_arr[ω_ind]
@@ -1335,8 +1328,7 @@ function kernel_δc₀₀_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSpl
 	Gobs, drGobs = arrs.Gobs1, arrs.drGobs1
 	f_robs_rsrc, Hjj_robs_rsrc = arrs.fjₒjₛ_r₁_rsrc, arrs.Hjₒjₛω_r₁r₂
 
-	ℓ_range = UnitRange(extremaelement(ℓ_ωind_iter_on_proc, dims = 1)...)
-	Y12 = los_projected_biposh_spheroidal(computeY₀₀, nobs1, nobs2_arr, los, ℓ_range)
+	Y12 = los_projected_biposh_spheroidal(computeY₀₀, nobs1, nobs2_arr, los, ℓ_ωind_iter_on_proc)
 
 	for (ℓ, ω_ind) in ℓ_ωind_iter_on_proc
 		ω = ω_arr[ω_ind]
@@ -1373,7 +1365,12 @@ function kernel_δc₀₀_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSpl
 	return K
 end
 
-function _K_δc₀₀(comm, m::SeismicMeasurement, xobs1, xobs2, los::los_direction; kwargs...)
+kernelfilenameδc₀₀(::TravelTimes, ::los_radial) = "K_δτ_δc₀₀.fits"
+kernelfilenameδc₀₀(::TravelTimes, ::los_earth) = "K_δτ_δc₀₀_los.fits"
+kernelfilenameδc₀₀(::Amplitudes, ::los_radial) = "K_A_δc₀₀.fits"
+kernelfilenameδc₀₀(::Amplitudes, ::los_earth) = "K_A_δc₀₀_los.fits"
+
+function kernel_δc₀₀(comm, m::SeismicMeasurement, xobs1, xobs2, los::los_direction = los_radial(); kwargs...)
 	r_src,r_obs = read_rsrc_robs_c_scale(kwargs)
 	p_Gsrc, p_Gobs1, p_Gobs2 = read_parameters_for_points(xobs1, xobs2; kwargs..., c_scale = 1)
 	@unpack ν_arr, ℓ_arr = p_Gsrc
@@ -1384,17 +1381,8 @@ function _K_δc₀₀(comm, m::SeismicMeasurement, xobs1, xobs2, los::los_direct
 		_broadcast(h, 0, comm)
 	end
 
-	pmapsum(comm, kernel_δc₀₀_partial, iters,
+	K = pmapsum(comm, kernel_δc₀₀_partial, iters,
 		xobs1, xobs2, los, hω_arr, p_Gsrc, p_Gobs1, p_Gobs2, r_src, r_obs)
-end
-
-kernelfilenameδc₀₀(::TravelTimes, ::los_radial) = "K_δτ_δc₀₀.fits"
-kernelfilenameδc₀₀(::TravelTimes, ::los_earth) = "K_δτ_δc₀₀_los.fits"
-kernelfilenameδc₀₀(::Amplitudes, ::los_radial) = "K_A_δc₀₀.fits"
-kernelfilenameδc₀₀(::Amplitudes, ::los_earth) = "K_A_δc₀₀_los.fits"
-
-function kernel_δc₀₀(comm, m::SeismicMeasurement, xobs1, xobs2, los::los_direction = los_radial(); kwargs...)
-	K = _K_δc₀₀(comm, m, xobs1, xobs2, los; kwargs...)
 	K === nothing && return nothing
 
 	if get(kwargs, :save, true)
@@ -1673,34 +1661,10 @@ function kernel_δcₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSpl
 	Array(K)
 end
 
-function _K_δcₛₜ(comm, m::SeismicMeasurement, xobs1, xobs2, los::los_direction, args...; kwargs...)
-	r_src, r_obs = read_rsrc_robs_c_scale(kwargs)
-	p_Gsrc, p_Gobs1, p_Gobs2 = read_parameters_for_points(xobs1, xobs2; kwargs..., c_scale = 1)
-	@unpack ν_arr, ℓ_arr = p_Gsrc
-	iters = ℓ_and_ν_range(ℓ_arr,ν_arr; kwargs...)
-
-	hω_arr = get(kwargs, :hω) do
-		h = hω(comm, m, xobs1, xobs2, los; kwargs..., print_timings = false)
-		_broadcast(h, 0, comm)
-	end
-
-	K_δcₛₜ = pmapsum(comm, kernel_δcₛₜ_partial, iters,
-		xobs1, xobs2, los, args..., hω_arr, p_Gsrc, p_Gobs1, p_Gobs2, r_src, r_obs)
-
-	return iters..., K_δcₛₜ
-end
-
-function kernelfilenameδcₛₜ(::TravelTimes, ::los_radial, j_range, SHModes)
-	   "Kst_δτ_c_$(modetag(j_range, SHModes)).fits"
-end
-function kernelfilenameδcₛₜ(::TravelTimes, ::los_earth, j_range, SHModes)
-	   "Kst_δτ_c_$(modetag(j_range, SHModes))_los.fits"
-end
-function kernelfilenameδcₛₜ(::Amplitudes, ::los_radial, j_range, SHModes)
-	   "Kst_A_c_$(modetag(j_range, SHModes)).fits"
-end
-function kernelfilenameδcₛₜ(::Amplitudes, ::los_earth, j_range, SHModes)
-	   "Kst_A_c_$(modetag(j_range, SHModes))_los.fits"
+function kernelfilenameδcₛₜ(m::SeismicMeasurement, los::los_direction, j_range, SHModes)
+	mtag = m isa TravelTimes ? "δτ" : "A"
+	lostag = los isa los_radial ? "" : "_los"
+	"Kst_$(mtag)_c_$(modetag(j_range, SHModes))$(lostag).fits"
 end
 
 function kernel_δcₛₜ(comm, m::SeismicMeasurement, xobs1, xobs2,
@@ -1708,7 +1672,20 @@ function kernel_δcₛₜ(comm, m::SeismicMeasurement, xobs1, xobs2,
 
 	SHModes = getkernelmodes(; kwargs...)
 
-	j_range,ν_ind_range, K_δcₛₜ = _K_δcₛₜ(comm, m, xobs1, xobs2, los, SHModes; kwargs...)
+	r_src, r_obs = read_rsrc_robs_c_scale(kwargs)
+	p_Gsrc, p_Gobs1, p_Gobs2 = read_parameters_for_points(xobs1, xobs2; kwargs..., c_scale = 1)
+	@unpack ν_arr, ℓ_arr = p_Gsrc
+	iters = ℓ_and_ν_range(ℓ_arr,ν_arr; kwargs...)
+	j_range, ν_ind_range = iters
+
+	hω_arr = get(kwargs, :hω) do
+		h = hω(comm, m, xobs1, xobs2, los; kwargs..., print_timings = false)
+		_broadcast(h, 0, comm)
+	end
+
+	K_δcₛₜ = pmapsum(comm, kernel_δcₛₜ_partial, iters,
+		xobs1, xobs2, los, SHModes, hω_arr, p_Gsrc, p_Gobs1, p_Gobs2, r_src, r_obs)
+
 	K_δcₛₜ === nothing && return nothing
 
 	if get(kwargs, :save, true)
