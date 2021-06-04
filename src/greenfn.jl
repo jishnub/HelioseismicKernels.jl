@@ -16,8 +16,11 @@ obsindFITS(::los_earth) = 1:2
 obsindG(::los_radial) = ()
 obsindG(::los_earth) = (0:1,)
 
-αrcomp(G::AbstractArray{ComplexF64, 2}, r_ind, α) = G[r_ind, α]
-αrcomp(G::AbstractArray{ComplexF64, 3}, r_ind, α) = G[r_ind, α, 0]
+sizeindG(::los_radial) = ()
+sizeindG(::los_earth) = (2,)
+
+αrcomp(G::AbstractArray{ComplexF64, 2}, r_ind, α) = G[α, r_ind]
+αrcomp(G::AbstractArray{ComplexF64, 3}, r_ind, α) = G[α, 0, r_ind]
 αrcomp(G::AbstractArray{ComplexF64, 2}, r_ind, ::los_radial) = αrcomp(G, r_ind, 0)
 αrcomp(G::AbstractArray{ComplexF64, 3}, r_ind, ::los_radial) = αrcomp(G, r_ind, 0)
 function αrcomp(G::AbstractArray{ComplexF64, 2}, r_ind, los::los_earth)
@@ -68,15 +71,13 @@ function _reimindices(I)
 	return ind1, Itrailing
 end
 
-function read_Gfn_file_at_index!(G::AbstractArray{<:Any,0}, G_hdu::ImageHDU, I...)
+function read_Gfn_file_at_index!(G::AbstractArray{<:Complex,0}, G_hdu::ImageHDU, I...)
 	G1D = reshape(G, 1)
-	ind1, Itrailing = _reimindices(I)
-	read!(G_hdu, reinterpret_as_float(G1D), ind1, Itrailing...)
+	read!(G_hdu, reinterpret_as_float(G1D), :, I...)
 	return G
 end
 function read_Gfn_file_at_index!(G, G_hdu::ImageHDU, I...)
-	ind1, Itrailing = _reimindices(I)
-	read!(G_hdu, reinterpret_as_float(G), ind1, Itrailing...)
+	read!(G_hdu, reinterpret_as_float(G), :, I...)
 	return G
 end
 
@@ -88,16 +89,14 @@ function read_Gfn_file_at_index(G_file::Union{FITS, ImageHDU},
 	read_Gfn_file_at_index(G_file, I..., ℓω_index_in_file)
 end
 
-function read_Gfn_file_at_index(G_hdu::ImageHDU, I...)
-	G = read(G_hdu, I...)
-	reinterpret_as_complex(G)
-end
+read_Gfn_file_at_index(G_hdu::ImageHDU, I...) =
+	dropdims(reinterpret_as_complex(read(G_hdu, :, I...)), dims = 1)
 
 function Gfn_fits_files(path::String, proc_id_range::AbstractUnitRange)
 	function f(procid, path)
 		filepath = joinpath(path, @sprintf "Gfn_proc_%03d.fits" procid)
 		f_FITS = FITS(filepath,"r") :: FITS
-		f_HDU = f_FITS[1] :: ImageHDU{Float64,5}
+		f_HDU = f_FITS[1] :: ImageHDU{Float64,6}
 		(fits = f_FITS, hdu = f_HDU)
 	end
 	Dict(procid => f(procid, path) for procid in proc_id_range)
@@ -119,10 +118,11 @@ closeGfnfits(d::Dict) = map(x -> close(x.fits), values(d))
 function Gfn_path_from_source_radius(r_src::Real; c_scale = 1)
 	dir = "Greenfn_src$((r_src/Rsun > 0.99 ?
 			(@sprintf "%dkm" (r_src-Rsun)/1e5) :
-			(@sprintf "%.2fRsun" r_src/Rsun) ))"
+			(@sprintf "%.2fRsun" r_src/Rsun)))"
 	if c_scale != 1
 		dir *= "_c_scale_$(@sprintf "%g" c_scale)"
 	end
+	dir *= "_flipped"
 	joinpath(SCRATCH[], dir)
 end
 Gfn_path_from_source_radius(x::Point3D; kwargs...) = Gfn_path_from_source_radius(x.r; kwargs...)
@@ -628,9 +628,9 @@ function divG_radial!(divG::AbstractMatrix, ℓ::Integer, G::AbstractArray{<:Any
 	# components in PB VSH basis
 	pre = -2Ω(ℓ, 0)
 
-	for β in UnitRange(axes(G, 3)), r_ind in UnitRange(axes(divG, 1))
-		divG[r_ind, β] = pre * G[r_ind, 1, β]/r[r_ind] +
-		drG[r_ind, 0, β] + 2/r[r_ind]*G[r_ind, 0, β]
+	for r_ind in UnitRange(axes(divG, 2)), β in UnitRange(axes(G, 2))
+		divG[β, r_ind] = pre * G[1, β, r_ind]/r[r_ind] +
+		drG[0, β, r_ind] + 2/r[r_ind]*G[0, β, r_ind]
 	end
 
 	divG
@@ -679,7 +679,7 @@ function radial_fn_δc_firstborn!(f::AbstractMatrix{<:Complex},
 	divG_radial!(divGobs, ℓ′, Gobs, drGobs)
 	divG_radial!(divGsrc, ℓ, Gsrc, drGsrc)
 
-	divGsrc_0 = view(divGsrc, :, 0) # Source is radial
+	divGsrc_0 = view(divGsrc, 0, :) # Source is radial
 
 	radial_fn_δc_firstborn!(f, divGsrc_0, divGobs)
 end
@@ -689,10 +689,10 @@ end
 function Hjₒjₛω!(Hjₒjₛω_r₁r₂::AbstractArray{<:Any, 3},
 	fjₒjₛ_r₁_rsrc::AbstractMatrix, Grjₛ_r₂_rsrc::AbstractVector)
 
-	for γ in UnitRange(axes(Grjₛ_r₂_rsrc, 1))
+	for r_ind in UnitRange(axes(fjₒjₛ_r₁_rsrc, 2)), γ in UnitRange(axes(Grjₛ_r₂_rsrc, 1))
 		Gγrjₛ_r₂_rsrc = Grjₛ_r₂_rsrc[γ]
-		for α in UnitRange(axes(fjₒjₛ_r₁_rsrc, 2)), r_ind in UnitRange(axes(fjₒjₛ_r₁_rsrc, 1))
-			Hjₒjₛω_r₁r₂[r_ind, α, γ] = conj(fjₒjₛ_r₁_rsrc[r_ind, α]) * Gγrjₛ_r₂_rsrc
+		for α in UnitRange(axes(fjₒjₛ_r₁_rsrc, 1))
+			Hjₒjₛω_r₁r₂[α, γ, r_ind] = conj(fjₒjₛ_r₁_rsrc[α, r_ind]) * Gγrjₛ_r₂_rsrc
 		end
 	end
 end
@@ -701,6 +701,7 @@ end
 # H_00jₒjₛ(r; r₁, r₂, rₛ) = conj(f_0jₒjₛ(r, r₁, rₛ)) G00jₛ(r₂, rₛ)
 function Hjₒjₛω!(Hjₒjₛω_r₁r₂::AbstractVector, fjₒjₛ_r₁_rsrc::AbstractVector, Grrjₛ_r₂_rsrc)
 	@. Hjₒjₛω_r₁r₂ = conj(fjₒjₛ_r₁_rsrc) * Grrjₛ_r₂_rsrc
+	return Hjₒjₛω_r₁r₂
 end
 
 # Radial components of dG for flows
@@ -708,19 +709,25 @@ end
 function radial_fn_uniform_rotation_firstborn!(G::AbstractVector,
 	Gsrc::AA, Gobs::AA, j, ::los_radial) where {AA<:AbstractMatrix}
 
-	@views @. G = Gsrc[:, 0] * Gobs[:, 0] -
-					Gsrc[:, 0] * Gobs[:, 1]/Ω(j, 0) -
-					Gsrc[:, 1]/Ω(j, 0) * Gobs[:, 0] +
-					ζjₒjₛs(j, j, 1) * Gsrc[:, 1] * Gobs[:, 1]
+	for r_ind in UnitRange(axes(Gsrc,3)),
+		G[r_ind] = Gsrc[0, r_ind] * Gobs[0, r_ind] -
+					Gsrc[0, r_ind] * Gobs[1, r_ind]/Ω(j, 0) -
+					Gsrc[1, r_ind]/Ω(j, 0) * Gobs[0, r_ind] +
+					ζjₒjₛs(j, j, 1) * Gsrc[1, r_ind] * Gobs[1, r_ind]
+	end
+	return G
 end
 
 function radial_fn_uniform_rotation_firstborn!(G::AbstractMatrix,
 	Gsrc::AA, Gobs::AA, j, ::los_earth) where {AA<:AbstractArray{<:Any, 3}}
 
-	@views @. G = Gsrc[:, 0, 0] * Gobs[:, 0, :] -
-					Gsrc[:, 0, 0] * Gobs[:, 1, :]/Ω(j, 0) -
-					Gsrc[:, 1, 0]/Ω(j, 0) * Gobs[:, 0, :] +
-					ζjₒjₛs(j, j, 1) * Gsrc[:, 1, 0] * Gobs[:, 1, :]
+	for r_ind in UnitRange(axes(Gsrc,3)), α₂ in UnitRange(axes(Gobs, 2))
+		G[α₂, r_ind] = Gsrc[0, 0, r_ind] * Gobs[0, α₂, r_ind] -
+					Gsrc[0, 0, r_ind] * Gobs[1, α₂, r_ind]/Ω(j, 0) -
+					Gsrc[1, 0, r_ind]/Ω(j, 0) * Gobs[0, α₂, r_ind] +
+					ζjₒjₛs(j, j, 1) * Gsrc[1, 0, r_ind] * Gobs[1, α₂, r_ind]
+	end
+	return G
 end
 
 function Gⱼₒⱼₛω_u⁺_firstborn!(G::AbstractMatrix,
@@ -729,13 +736,14 @@ function Gⱼₒⱼₛω_u⁺_firstborn!(G::AbstractMatrix,
 	# The actual G¹ₗⱼ₁ⱼ₂ω_00(r, rᵢ, rₛ) =  G[:, 0] + ζ(jₛ, jₒ, ℓ)G[:, 1]
 	# We store the terms separately and add them up for each ℓ
 
-	for r_ind in UnitRange(axes(G, 1))
-		G[r_ind, 0] = Gsrc[r_ind, 0] * Gobs[r_ind, 0] -
-							Gsrc[r_ind, 0] * Gobs[r_ind, 1]/Ω(jₒ, 0) -
-							Gsrc[r_ind, 1]/Ω(jₛ, 0) * Gobs[r_ind, 0]
+	for r_ind in UnitRange(axes(G, 2))
+		G[0, r_ind] = Gsrc[0, r_ind] * Gobs[0, r_ind] -
+							Gsrc[0, r_ind] * Gobs[1, r_ind]/Ω(jₒ, 0) -
+							Gsrc[1, r_ind]/Ω(jₛ, 0) * Gobs[0, r_ind]
 
-		G[r_ind, 1] = Gsrc[r_ind, 1] * Gobs[r_ind, 1]
+		G[1, r_ind] = Gsrc[1, r_ind] * Gobs[1, r_ind]
 	end
+	return G
 end
 
 function Gⱼₒⱼₛω_u⁺_firstborn!(G::AbstractArray{<:Any, 3},
@@ -745,13 +753,14 @@ function Gⱼₒⱼₛω_u⁺_firstborn!(G::AbstractArray{<:Any, 3},
 	# The actual G¹ₗⱼ₁ⱼ₂ω_α₁0(r, rᵢ, rₛ) = G[:, 0, α₁] + ζ(jₛ, jₒ, ℓ)G[:, 1, α₁]
 	# We store the terms separately and add them up for each ℓ
 
-	for α₁ in UnitRange(axes(G, 2)), r_ind in UnitRange(axes(G, 1))
-		G[r_ind, 0, α₁] = Gsrc[r_ind, 0, 0] * Gobs[r_ind, 0, α₁] -
-							Gsrc[r_ind, 0, 0] * Gobs[r_ind, 1, α₁]/Ω(jₒ, 0) -
-							Gsrc[r_ind, 1, 0]/Ω(jₛ, 0) * Gobs[r_ind, 0, α₁]
+	for r_ind in UnitRange(axes(G, 3)), α₁ in UnitRange(axes(G, 2))
+		G[0, α₁, r_ind] = Gsrc[0, 0, r_ind] * Gobs[0, α₁, r_ind] -
+							Gsrc[0, 0, r_ind] * Gobs[1, α₁, r_ind]/Ω(jₒ, 0) -
+							Gsrc[1, 0, r_ind]/Ω(jₛ, 0) * Gobs[0, α₁, r_ind]
 
-		G[r_ind, 1, α₁] = Gsrc[r_ind, 1, 0] * Gobs[r_ind, 1, α₁]
+		G[1, α₁, r_ind] = Gsrc[1, 0, r_ind] * Gobs[1, α₁, r_ind]
 	end
+	return G
 end
 
 function Gⱼₒⱼₛω_u⁰_firstborn!(G::AbstractMatrix{<:Any},
@@ -761,6 +770,7 @@ function Gⱼₒⱼₛω_u⁰_firstborn!(G::AbstractMatrix{<:Any},
 	# We store the terms separately and add them up for each ℓ
 
 	@. G = Gobs * drGsrc
+	return G
 end
 
 function Gⱼₒⱼₛω_u⁰_firstborn!(G::AbstractArray{<:Any, 3},
@@ -768,73 +778,102 @@ function Gⱼₒⱼₛω_u⁰_firstborn!(G::AbstractArray{<:Any, 3},
 
 	# The actual G⁰ₗⱼ₁ⱼ₂ω_α₁0(r, rᵢ, rₛ) = G[:, 0, α₁] + ζ(jₛ, jₒ, ℓ)G[:, 1, α₁]
 	# We store the terms separately and add them up for each ℓ
-	for α₁ in UnitRange(axes(Gobs, 3)), ind in UnitRange(axes(G,2)), r_ind in UnitRange(axes(Gobs, 1))
-		G[r_ind, ind, α₁] = Gobs[r_ind, ind, α₁] * drGsrc[r_ind, ind, 0]
+	for r_ind in UnitRange(axes(Gobs, 3)), α₁ in UnitRange(axes(Gobs, 2)), ind in UnitRange(axes(G,1))
+		G[ind, α₁, r_ind] = Gobs[ind, α₁, r_ind] * drGsrc[ind, 0, r_ind]
 	end
+	return G
 end
 
 # This function computes Gparts
 # Components (0) and (+)
-function Gⱼₒⱼₛω_u⁰⁺_firstborn!(G::OffsetVector,
-	Gsrc::AA, drGsrc::AA, jₛ::Integer,
-	Gobs::AA, jₒ::Integer, los::los_direction) where {AA<:AbstractArray}
-
-	Gⱼₒⱼₛω_u⁰_firstborn!(G[0], drGsrc, jₛ, Gobs, jₒ, los)
-	Gⱼₒⱼₛω_u⁺_firstborn!(G[1],  Gsrc, jₛ, Gobs, jₒ, los)
+function Gⱼₒⱼₛω_u⁰⁺_firstborn!(G, Gsrc, drGsrc, jₛ::Integer, Gobs, jₒ::Integer, los::los_direction)
+	Gⱼₒⱼₛω_u⁰_firstborn!(view(G, .., 0), drGsrc, jₛ, Gobs, jₒ, los)
+	Gⱼₒⱼₛω_u⁺_firstborn!(view(G, .., 1),  Gsrc, jₛ, Gobs, jₒ, los)
+	return G
 end
 
-# This function is used in computing Jₗⱼₒⱼₛω_u⁰⁺_firstborn
 # We evaluate Gγₗⱼ₁ⱼ₂ω_00(r, rᵢ, rₛ) = Gsum[r,γ] = G[:, 0] + ζ(jₛ, jₒ, ℓ)G[:, 1]
 # This function is run once for each ℓ using cached values of G
-function Gγₗⱼₒⱼₛω_α₁_firstborn!(Gsum::OffsetMatrix,
-	Gparts::OffsetVector{<:OffsetMatrix}, jₒ::Int, jₛ::Int, ℓ::Int)
+function Gγₗⱼₒⱼₛω_α₁_firstborn!(Gγₗⱼₒⱼₛω_α₁::StructArray{<:Complex, 2}, Gparts::StructArray{<:Complex, 3}, jₒ, jₛ, ℓ)
 
 	coeff = ζjₒjₛs( jₒ, jₛ, ℓ)
 
-	for (ind, G) in pairs(Gparts)
-		for r_ind in UnitRange(axes(Gsum, 1))
-			Gsum[r_ind, ind] = G[r_ind, 0] + coeff * G[r_ind, 1]
-		end
+	for γ in UnitRange(axes(Gγₗⱼₒⱼₛω_α₁, 2)), rind in UnitRange(axes(Gγₗⱼₒⱼₛω_α₁, 1))
+		Gγₗⱼₒⱼₛω_α₁.re[rind, γ] = Gparts.re[0, rind, γ] + coeff * Gparts.re[1, rind, γ]
+		Gγₗⱼₒⱼₛω_α₁.im[rind, γ] = Gparts.im[0, rind, γ] + coeff * Gparts.im[1, rind, γ]
 	end
+	return Gγₗⱼₒⱼₛω_α₁
 end
 
-# This function is used in computing Jₗⱼₒⱼₛω_u⁰⁺_firstborn
-# We evaluate Gγₗⱼ₁ⱼ₂ω_α₁0(r, rᵢ, rₛ) = Gsum[r,γ, α₁] = G[:, 0, α₁] + ζ(jₛ, jₒ, ℓ)G[:, 1, α₁]
+# We evaluate Gγₗⱼ₁ⱼ₂ω_α₁0(r, rᵢ, rₛ) = Gsum[r, γ, α₁] = G[:, 0, α₁] + ζ(jₛ, jₒ, ℓ)G[:, 1, α₁]
 # This function is run once for each ℓ using cached values of G
-function Gγₗⱼₒⱼₛω_α₁_firstborn!(Gsum::OffsetArray{<:Any, 3},
-	Gparts::OffsetVector{<:OffsetArray{<:Any, 3}},
-	jₒ::Int, jₛ::Int, ℓ::Int)
+function Gγₗⱼₒⱼₛω_α₁_firstborn!(Gγₗⱼₒⱼₛω_α₁::StructArray{<:Complex, 3}, Gparts::StructArray{<:Complex, 4}, jₒ, jₛ, ℓ)
 
 	coeff = ζjₒjₛs( jₒ, jₛ, ℓ)
 
-	for (ind, G) in pairs(Gparts)
-		for α₁ in UnitRange(axes(Gsum, 3)), r_ind in UnitRange(axes(Gsum, 1))
-			Gsum[r_ind, ind, α₁] = G[r_ind, 0, α₁] + coeff * G[r_ind, 1, α₁]
-		end
+	GT = HybridArray{Tuple{2,StaticArrays.Dynamic(),2}}
+	GR = GT(parent(Gγₗⱼₒⱼₛω_α₁.re))
+	GI = GT(parent(Gγₗⱼₒⱼₛω_α₁.im))
+
+	GPT = HybridArray{Tuple{2,2,StaticArrays.Dynamic(),2}}
+	GPR = GPT(parent(Gparts.re))
+	GPI = GPT(parent(Gparts.im))
+
+	@turbo for I in CartesianIndices(GR)
+		GR[I] = GPR[1, I] + coeff * GPR[2, I]
+		GI[I] = GPI[1, I] + coeff * GPI[2, I]
 	end
+	return Gγₗⱼₒⱼₛω_α₁
 end
 
 # We compute Hγₗⱼ₁ⱼ₂ω_00(r, r₁, r₂, rₛ) = conj(Gγₗⱼ₁ⱼ₂ω_00(r, r₁, rₛ)) * Gⱼ₂ω_00(r₂, rₛ)
-function Hγₗⱼₒⱼₛω_α₁α₂_firstborn!(H::AbstractArray{ComplexF64, 2}, Gparts,
-	Gγₗⱼₒⱼₛω_α₁::AbstractArray{ComplexF64, 2}, Grr::ComplexF64, jₒ, jₛ, ℓ)
+function Hγₗⱼₒⱼₛω_α₁α₂_firstborn!(H::StructArray{<:Complex, 2}, Gparts,
+	Gγₗⱼₒⱼₛω_α₁::AbstractMatrix{<:Complex}, Grr::Complex, jₒ, jₛ, ℓ)
 
 	Gγₗⱼₒⱼₛω_α₁_firstborn!(Gγₗⱼₒⱼₛω_α₁, Gparts, jₒ, jₛ, ℓ)
-	@. H = conj(Gγₗⱼₒⱼₛω_α₁) * Grr
+	# @. H = conj(Gγₗⱼₒⱼₛω_α₁) * Grr
+	@. H.re = Gγₗⱼₒⱼₛω_α₁.re * real(Grr) + Gγₗⱼₒⱼₛω_α₁.im * imag(Grr)
+	@. H.im = Gγₗⱼₒⱼₛω_α₁.re * imag(Grr) - Gγₗⱼₒⱼₛω_α₁.im * real(Grr)
+	return H
 end
 
 # We compute Hγₗⱼ₁ⱼ₂ω_α₁α₂(r, r₁, r₂, rₛ) = conj(Gγₗⱼ₁ⱼ₂ω_α₁0(r, r₁, rₛ)) * Gⱼ₂ω_α₂0(r₂, rₛ)
-function Hγₗⱼₒⱼₛω_α₁α₂_firstborn!(H::AbstractArray{ComplexF64, 4}, Gparts,
-	Gγₗⱼₒⱼₛω_α₁_r₁::AbstractArray{ComplexF64, 3}, G::AbstractVector{ComplexF64}, jₒ, jₛ, ℓ)
+function Hγₗⱼₒⱼₛω_α₁α₂_firstborn!(H::StructArray{<:Complex, 4}, Gparts,
+	Gγₗⱼₒⱼₛω_α₁_r₁::StructArray{<:Complex, 3}, G::AbstractVector{<:Complex}, jₒ, jₛ, ℓ)
 
 	Gγₗⱼₒⱼₛω_α₁_firstborn!(Gγₗⱼₒⱼₛω_α₁_r₁, Gparts, jₒ, jₛ, ℓ)
 
-	for α₂ in UnitRange(axes(G, 1))
-		Gα₂r_r₂ = G[α₂]
-		for ind3 in UnitRange(axes(Gγₗⱼₒⱼₛω_α₁_r₁, 3)),
-			ind2 in UnitRange(axes(Gγₗⱼₒⱼₛω_α₁_r₁, 2)),
-			ind1 in UnitRange(axes(Gγₗⱼₒⱼₛω_α₁_r₁, 1))
+	HT = HybridArray{Tuple{2,2,StaticArrays.Dynamic(),2}}
+	HR = HT(parent(H.re))
+	HI = HT(parent(H.im))
 
-			H[ind1, ind2, ind3, α₂] = conj(Gγₗⱼₒⱼₛω_α₁_r₁[ind1, ind2, ind3]) * Gα₂r_r₂
+	GT = HybridArray{Tuple{2,StaticArrays.Dynamic(),2}}
+	GR = GT(parent(Gγₗⱼₒⱼₛω_α₁_r₁.re))
+	GI = GT(parent(Gγₗⱼₒⱼₛω_α₁_r₁.im))
+
+	GsrcR = SVector{2}(real(G[0]), real(G[1]))
+	GsrcI = SVector{2}(imag(G[0]), imag(G[1]))
+
+	@turbo for γ in UnitRange(axes(HR, 4)), rind in UnitRange(axes(HR, 3)), obsind2 in UnitRange(axes(HR, 2))
+		GsrcR_obs2 = GsrcR[obsind2]
+		GsrcI_obs2 = GsrcI[obsind2]
+		for obsind1 in UnitRange(axes(HR, 1))
+			HR[obsind1, obsind2, rind, γ] = GR[obsind1, rind, γ] * GsrcR_obs2 + GI[obsind1, rind, γ] * GsrcI_obs2
+			HI[obsind1, obsind2, rind, γ] = GR[obsind1, rind, γ] * GsrcI_obs2 - GI[obsind1, rind, γ] * GsrcR_obs2
 		end
 	end
+	return H
+end
+
+function permuteGfn(path)
+	newdir = joinpath(path, "..", path*"_flipped")
+	isdir(newdir) || mkdir(newdir)
+	files =	filter(x -> endswith(x, ".fits"), readdir(path))
+	@showprogress 1 for filename in files
+		_data = FITSIO.fitsread(joinpath(path, filename))::Array{Float64,5}
+		data = reshape(_data, 2, nr, 2, 2, 2, :)
+		data2 = permutedims(data, [1, 3, 4, 2, 5, 6])
+		FITSIO.fitswrite(joinpath(newdir, filename), data2)
+	end
+	cp(joinpath(path, "parameters.jld2"), joinpath(newdir, "parameters.jld2"), force = true)
 end

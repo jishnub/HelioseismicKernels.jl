@@ -52,6 +52,17 @@ function unpackGfnparams(p_Gsrc, r_src, p_Gobs1, r_obs1, p_Gobs2, r_obs2)
 		p_Gsrc, p_Gobs1, p_Gobs2)
 end
 
+function los_projected_spheroidal_biposh_flippoints(xobs1, xobs2, los, SHModes, jₒjₛ_allmodes, localtimer)
+	l1, l2 = line_of_sight_covariant.((xobs1, xobs2), los)
+	@timeit localtimer "BiPoSH" begin
+		_Y12, _Y21 = biposh_flippoints(los isa los_radial ? SH() : GSH(),
+		Point2D(xobs1)..., Point2D(xobs2)..., SHModes, jₒjₛ_allmodes)
+		Y12 = biposh_spheroidal(los_projected_biposh(los, _Y12, l1, l2))
+		Y21 = biposh_spheroidal(los_projected_biposh(los, _Y21, l2, l1))
+	end
+	return Y12, Y21
+end
+
 ########################################################################################
 # Validation for uniform rotation
 ########################################################################################
@@ -70,14 +81,13 @@ function populatekernelvalidation!(::Flow, ::los_earth, K::AbstractVector{<:Real
 
 	pre = 2 * dω/2π * ω^3 * Powspec(ω) * √((j*(j+1))/π)
 
-	for α₂ in 0:1, α₁ in 0:1
+	for r_ind in UnitRange(axes(K, 1))
+		for α₂ in 0:1, α₁ in 0:1
+			Pʲʲ₁₀_α₁α₂ = pre * imag(Y12j[α₁, α₂])
+			iszero(Pʲʲ₁₀_α₁α₂) && continue
 
-		Pʲʲ₁₀_α₁α₂ = pre * imag(Y12j[α₁, α₂])
-		iszero(Pʲʲ₁₀_α₁α₂) && continue
-
-		for r_ind in UnitRange(axes(K, 1))
 			K[r_ind] += Pʲʲ₁₀_α₁α₂ * imag(conjhω *
-				( H¹₁jj_r₁r₂[r_ind, α₁, α₂] + conj(H¹₁jj_r₂r₁[r_ind, α₂, α₁] ) ) )
+				( H¹₁jj_r₁r₂[α₁, α₂, r_ind] + conj(H¹₁jj_r₂r₁[α₂, α₁, r_ind] ) ) )
 		end
 	end
 end
@@ -105,13 +115,13 @@ function populatekernelvalidation!(::Flow, ::los_earth, K::AbstractMatrix{<:Real
 		Y12j_n₂ = Y12j[n2ind]
 		conjhω_n₂ = conjhω[n2ind]
 
-		for α₂ in 0:1, α₁ in 0:1
-			Pʲʲ₁₀_α₁α₂ = pre * imag(Y12j_n₂[α₁, α₂])
-			iszero(Pʲʲ₁₀_α₁α₂) && continue
+		for r_ind in UnitRange(axes(K, 1))
+			for α₂ in 0:1, α₁ in 0:1
+				Pʲʲ₁₀_α₁α₂ = pre * imag(Y12j_n₂[α₁, α₂])
+				iszero(Pʲʲ₁₀_α₁α₂) && continue
 
-			for r_ind in UnitRange(axes(K, 1))
 				K[r_ind, n2ind] += Pʲʲ₁₀_α₁α₂ * imag(conjhω_n₂ *
-					(H¹₁jj_r₁r₂[r_ind, α₁, α₂] + conj(H¹₁jj_r₂r₁[r_ind, α₂, α₁] ) ) )
+					(H¹₁jj_r₁r₂[α₁, α₂, r_ind] + conj(H¹₁jj_r₂r₁[α₂, α₁, r_ind] ) ) )
 			end
 		end
 	end
@@ -150,14 +160,14 @@ function kernel_ℑu⁺₁₀_partial(localtimer, ℓ_ωind_iter_on_proc::Produc
 
 		# Green function about the source radius
 		read_Gfn_file_at_index!(Gsrc, Gfn_fits_files_src,
-			(ℓ_arr, 1:Nν_Gfn), (j, ω_ind), NGfn_files_src, :, 1:2, srcindFITS(los), 1)
+			(ℓ_arr, 1:Nν_Gfn), (j, ω_ind), NGfn_files_src, 1:2, srcindFITS(los), :, 1)
 
 		Gγr_r₁_rsrc = αrcomp(Gsrc, r₁_ind, los)
 		Gγr_r₂_rsrc = αrcomp(Gsrc, r₂_ind, los)
 
 		# Green function about receiver location
 		read_Gfn_file_at_index!(Gobs1, Gfn_fits_files_obs1,
-			(ℓ_arr, 1:Nν_Gfn), (j, ω_ind), NGfn_files_obs1, :, 1:2, srcindFITS(los), 1)
+			(ℓ_arr, 1:Nν_Gfn), (j, ω_ind), NGfn_files_obs1, 1:2, srcindFITS(los), :, 1)
 
 		radial_fn_uniform_rotation_firstborn!(G¹₁jj_r₁, Gsrc, Gobs1, j, los)
 		Hjₒjₛω!(H¹₁jj_r₁r₂, G¹₁jj_r₁, Gγr_r₂_rsrc)
@@ -165,7 +175,7 @@ function kernel_ℑu⁺₁₀_partial(localtimer, ℓ_ωind_iter_on_proc::Produc
 		if r₁_ind != r₂_ind
 			# Green function about receiver location
 			read_Gfn_file_at_index!(Gobs2, Gfn_fits_files_obs2,
-			(ℓ_arr, 1:Nν_Gfn), (j, ω_ind), NGfn_files_obs2, :, 1:2, srcindFITS(los), 1)
+			(ℓ_arr, 1:Nν_Gfn), (j, ω_ind), NGfn_files_obs2, 1:2, srcindFITS(los), :, 1)
 
 			radial_fn_uniform_rotation_firstborn!(G¹₁jj_r₂, Gsrc, Gobs2, j, los)
 			Hjₒjₛω!(H¹₁jj_r₂r₁, G¹₁jj_r₂, Gγr_r₁_rsrc)
@@ -215,13 +225,13 @@ function kernel_ℑu⁺₁₀_partial(localtimer, ℓ_ωind_iter_on_proc::Produc
 
 		# Green function about the source radius
 		read_Gfn_file_at_index!(Gsrc, Gfn_fits_files_src,
-			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, :, 1:2, srcindFITS(los), 1)
+			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, 1:2, srcindFITS(los), :, 1)
 
 		G_r₂_rsrc = αrcomp(Gsrc, r_obs_ind, los)
 
 		# Green function about receiver location
 		read_Gfn_file_at_index!(Gobs1, Gfn_fits_files_obs,
-			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_obs, :, 1:2, srcindFITS(los), 1)
+			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_obs, 1:2, srcindFITS(los), :, 1)
 
 		radial_fn_uniform_rotation_firstborn!(G¹₁jj_r₁, Gsrc, Gobs1, ℓ, los)
 		Hjₒjₛω!(H¹₁jj_r₁r₂, G¹₁jj_r₁, G_r₂_rsrc)
@@ -459,6 +469,47 @@ function populatekernel!(::Flow, ::los_earth, K::AbstractArray{<:Complex,3},
 	return nothing
 end
 
+populatekernel2!(::Flow, ::los_radial, args...) = populatekernel!(Flow(), los_radial(), args...)
+function populatekernel2!(::Flow, ::los_earth, K::AbstractArray{<:Complex,3},
+	SHModes, Yjₒjₛ_lm_n₁n₂, Yjₒjₛ_lm_n₂n₁,
+	(l, m), (jₛ, jₒ, ω),
+	twoimagconjhωHγℓjₒjₛ_r₁r₂,
+	twoimagconjhωconjHγℓjₒjₛ_r₂r₁,
+	pre⁰, pre⁺, phase, temp)
+
+	mode_ind = modeindex(firstshmodes(Yjₒjₛ_lm_n₁n₂), (l, m))
+	mode_ind_K = modeindex(SHModes, (l, m))
+
+	_Yjₒjₛ_lm_n₁n₂ = parent(Yjₒjₛ_lm_n₁n₂[mode_ind])
+	_Yjₒjₛ_lm_n₂n₁ = parent(Yjₒjₛ_lm_n₂n₁[mode_ind])
+
+	minusindK, zeroindK, plusindK = axes(K, 1)
+	zeroindT, plusindT = axes(twoimagconjhωconjHγℓjₒjₛ_r₂r₁, 2)
+
+	anyzeromom = l == 0 || jₛ == 0
+	evenmom = iseven(jₒ + jₛ + l)
+
+	@turbo for r_ind in eachindex(r)
+		TP₁₂⁰ = pre⁰ * sum(_Yjₒjₛ_lm_n₁n₂ .* twoimagconjhωHγℓjₒjₛ_r₁r₂[r_ind, zeroindT])
+		TP₂₁⁰ = pre⁰ * sum(_Yjₒjₛ_lm_n₂n₁ .* twoimagconjhωconjHγℓjₒjₛ_r₂r₁[r_ind, zeroindT])
+		TP₁₂¹ = pre⁺ * sum(_Yjₒjₛ_lm_n₁n₂ .* twoimagconjhωHγℓjₒjₛ_r₁r₂[r_ind, plusindT])
+		TP₂₁¹ = pre⁺ * sum(_Yjₒjₛ_lm_n₂n₁ .* twoimagconjhωconjHγℓjₒjₛ_r₂r₁[r_ind, plusindT])
+
+		K.re[zeroindK, r_ind, mode_ind_K] += evenmom * (real(TP₂₁⁰) - real(TP₁₂⁰))
+		K.im[zeroindK, r_ind, mode_ind_K] += evenmom * (imag(TP₂₁⁰) - imag(TP₁₂⁰))
+
+		tempre = !anyzeromom * (real(TP₂₁¹) - real(TP₁₂¹))
+		tempim = !anyzeromom * (imag(TP₂₁¹) - imag(TP₁₂¹))
+
+		K.re[plusindK, r_ind, mode_ind_K] += tempre
+		K.im[plusindK, r_ind, mode_ind_K] += tempim
+		K.re[minusindK, r_ind, mode_ind_K] += phase * tempre
+		K.im[minusindK, r_ind, mode_ind_K] += phase * tempim
+	end
+
+	return nothing
+end
+
 function populatekernelrθϕl0!(::Flow, ::los_radial, K::AbstractArray{<:Real, 3},
 	SHModes, Yjₒjₛ_lm_n₁n₂, Yjₒjₛ_lm_n₂n₁,
 	(l,_), (jₛ, jₒ, ω), twoimagconjhωconjHγℓjₒjₛ_r₂r₁, twoimagconjhωHγℓjₒjₛ_r₁r₂,
@@ -557,16 +608,8 @@ function populatekernelrθϕl0!(::Flow, ::los_earth, K::AbstractArray{<:Real, 3}
 	return nothing
 end
 
-function los_projected_spheroidal_biposh_flippoints(xobs1, xobs2, los, SHModes, jₒjₛ_allmodes, localtimer)
-	l1, l2 = line_of_sight_covariant.((xobs1, xobs2), los)
-	@timeit localtimer "BiPoSH" begin
-		_Y12, _Y21 = biposh_flippoints(los isa los_radial ? SH() : GSH(),
-		Point2D(xobs1)..., Point2D(xobs2)..., SHModes, jₒjₛ_allmodes)
-		Y12 = biposh_spheroidal(los_projected_biposh(los, _Y12, l1, l2))
-		Y21 = biposh_spheroidal(los_projected_biposh(los, _Y21, l2, l1))
-	end
-	return Y12, Y21
-end
+_maybepermutedims(A::AbstractArray{<:Any, 4}) = Base.PermutedDimsArray(A, (3,4,1,2))
+_maybepermutedims(A::AbstractArray{<:Any, 2}) = A
 
 function kernel_uₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit,
 	xobs1::Point3D, xobs2::Point3D, los::los_direction, SHModes, hω_arr,
@@ -602,7 +645,7 @@ function kernel_uₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit
 						(ℓ_arr, 1:Nν_Gfn), ℓ_ωind_iter_on_proc, s_max, NGfn_files_obs2)
 
 	# K = zeros(ComplexF64, nr, -1:1, length(SHModes))
-	Kre = zeros(nr, -1:1, length(SHModes))
+	Kre = zeros(-1:1, nr, length(SHModes))
 	K = StructArray{ComplexF64}((Kre, zero(Kre))) # Kγₗₘ(r, x₁, x₂)
 
 	ind⁰ = UnitRange(axes(Kre, 2))[2]
@@ -611,6 +654,13 @@ function kernel_uₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit
 	@unpack Gsrc, drGsrc, Gparts_r₁, Gparts_r₂,
 	Gγℓjₒjₛ_r₁, Gγℓjₒjₛ_r₂, Hγℓjₒjₛ_r₁r₂, Hγℓjₒjₛ_r₂r₁, temp = arrs;
 	@unpack twoimagconjhωconjHγℓjₒjₛ_r₂r₁, twoimagconjhωHγℓjₒjₛ_r₁r₂ = arrs;
+	twoimagconjhωconjHγℓjₒjₛ_r₂r₁P, twoimagconjhωHγℓjₒjₛ_r₁r₂P = map(parent, (twoimagconjhωconjHγℓjₒjₛ_r₂r₁, twoimagconjhωHγℓjₒjₛ_r₁r₂))
+
+	reinterpretSMatrix(A::AbstractArray{<:Any, 4}) = dropdims(reinterpret(SMatrix{2,2,eltype(A),4}, reshape(A, 4, size(A)[3:4]...)), dims = 1)
+	reinterpretSMatrix(A::AbstractArray{<:Any, 2}) = A
+
+	twoimagconjhωconjHγℓjₒjₛ_r₂r₁S = reinterpretSMatrix(parent(twoimagconjhωconjHγℓjₒjₛ_r₂r₁))
+	twoimagconjhωHγℓjₒjₛ_r₁r₂S = reinterpretSMatrix(parent(twoimagconjhωHγℓjₒjₛ_r₁r₂))
 
 	jₒjₛ_allmodes = L2L1Triangle(ℓ_range_proc, s_max, ℓ_arr)
 	jₒrange = l2_range(jₒjₛ_allmodes)
@@ -649,22 +699,27 @@ function kernel_uₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit
 
 	ω_ind_prev = first(ℓ_ωind_iter_on_proc)[2] - 1
 
+	HT = HybridArray{Tuple{2,2,StaticArrays.Dynamic(),2}}
+	H₂₁R = HT(parent(Hγℓjₒjₛ_r₂r₁.re))
+	H₂₁I = HT(parent(Hγℓjₒjₛ_r₂r₁.im))
+	H₁₂R = HT(parent(Hγℓjₒjₛ_r₁r₂.re))
+	H₁₂I = HT(parent(Hγℓjₒjₛ_r₁r₂.im))
+
 	# Loop over the Greenfn files
 	for (jₛ, ω_ind) in ℓ_ωind_iter_on_proc
 		ω = ω_arr[ω_ind]
 		h_ω = hω_arr[ω_ind]
-		conjhω = conj(h_ω)
 		dωω³Pω = dω/2π * ω^3 * Powspec(ω)
 		Ωjₛ0 = Ω(jₛ, 0)
 
 		@timeit localtimer "FITS" begin
 		# Green function about the source radius
 		read_Gfn_file_at_index!(Gsrc, Gfn_fits_files_src,
-		(ℓ_arr, 1:Nν_Gfn), (jₛ, ω_ind), NGfn_files_src, :, 1:2, srcindFITS(los), 1)
+		(ℓ_arr, 1:Nν_Gfn), (jₛ, ω_ind), NGfn_files_src, 1:2, srcindFITS(los), :, 1)
 
 		# Derivative of Green function about the source radius
 		read_Gfn_file_at_index!(drGsrc, Gfn_fits_files_src,
-		(ℓ_arr, 1:Nν_Gfn), (jₛ, ω_ind), NGfn_files_src, :, 1:2, srcindFITS(los), 2)
+		(ℓ_arr, 1:Nν_Gfn), (jₛ, ω_ind), NGfn_files_src, 1:2, srcindFITS(los), :, 2)
 		end # timer
 
 		Gα₂r_r₁_rₛ = αrcomp(Gsrc, r₁_ind, los)
@@ -688,7 +743,7 @@ function kernel_uₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit
 			# Green functions based at the observation point
 			if ω_ind != ω_ind_prev || jₒ ∉ l2_range(jₒjₛ_allmodes, jₛ-1)
 				read_Gfn_file_at_index!(Gobs1, Gfn_fits_files_obs1,
-				(ℓ_arr, 1:Nν_Gfn), (jₒ, ω_ind), NGfn_files_obs1, :, 1:2, srcindFITS(los), 1)
+				(ℓ_arr, 1:Nν_Gfn), (jₒ, ω_ind), NGfn_files_obs1, 1:2, srcindFITS(los), :, 1)
 			end
 			end # timer
 
@@ -702,7 +757,7 @@ function kernel_uₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit
 				@timeit localtimer "FITS" begin
 				if ω_ind != ω_ind_prev || jₒ ∉ l2_range(jₒjₛ_allmodes, jₛ-1)
 					read_Gfn_file_at_index!(Gobs2, Gfn_fits_files_obs2,
-					(ℓ_arr, 1:Nν_Gfn), (jₒ, ω_ind), NGfn_files_obs2, :, 1:2, srcindFITS(los), 1)
+					(ℓ_arr, 1:Nν_Gfn), (jₒ, ω_ind), NGfn_files_obs2, 1:2, srcindFITS(los), :, 1)
 				end
 				end # timer
 
@@ -721,14 +776,24 @@ function kernel_uₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit
 
 				if l != l_prev
 					@timeit localtimer "radial term 2" begin
-						Hγₗⱼₒⱼₛω_α₁α₂_firstborn!(Hγℓjₒjₛ_r₁r₂, Gparts_r₁, Gγℓjₒjₛ_r₁, Gα₂r_r₂_rₛ, jₒ, jₛ, l)
+						@timeit localtimer "H" begin
+							Hγₗⱼₒⱼₛω_α₁α₂_firstborn!(Hγℓjₒjₛ_r₁r₂, Gparts_r₁, Gγℓjₒjₛ_r₁, Gα₂r_r₂_rₛ, jₒ, jₛ, l)
 
-						if !obs_at_same_height
-							Hγₗⱼₒⱼₛω_α₁α₂_firstborn!(Hγℓjₒjₛ_r₂r₁, Gparts_r₂, Gγℓjₒjₛ_r₂, Gα₂r_r₁_rₛ, jₒ, jₛ, l)
+							if !obs_at_same_height
+								Hγₗⱼₒⱼₛω_α₁α₂_firstborn!(Hγℓjₒjₛ_r₂r₁, Gparts_r₂, Gγℓjₒjₛ_r₂, Gα₂r_r₁_rₛ, jₒ, jₛ, l)
+							end
 						end
 
-						@. twoimagconjhωconjHγℓjₒjₛ_r₂r₁ = -2imag(h_ω * Hγℓjₒjₛ_r₂r₁)
-						@. twoimagconjhωHγℓjₒjₛ_r₁r₂ = 2imag(conjhω * Hγℓjₒjₛ_r₁r₂)
+						@timeit localtimer "T" begin
+							@turbo for I in CartesianIndices(H₂₁R)
+								twoimagconjhωconjHγℓjₒjₛ_r₂r₁P[I] = -2(real(h_ω) * H₂₁I[I] + imag(h_ω) * H₂₁R[I])
+								twoimagconjhωHγℓjₒjₛ_r₁r₂P[I] = 2(real(h_ω) * H₁₂I[I] - imag(h_ω) * H₁₂R[I])
+							end
+							# @turbo @. twoimagconjhωconjHγℓjₒjₛ_r₂r₁  = -2(real(h_ω) * Hγℓjₒjₛ_r₂r₁.im + imag(h_ω) * Hγℓjₒjₛ_r₂r₁.re)
+							# @turbo @. twoimagconjhωHγℓjₒjₛ_r₁r₂ = 2(real(h_ω) * Hγℓjₒjₛ_r₁r₂.im - imag(h_ω) * Hγℓjₒjₛ_r₁r₂.re)
+						end
+						# @. twoimagconjhωconjHγℓjₒjₛ_r₂r₁ = -2imag(h_ω * Hγℓjₒjₛ_r₂r₁)
+						# @. twoimagconjhωHγℓjₒjₛ_r₁r₂ = 2imag(conjhω * Hγℓjₒjₛ_r₁r₂)
 
 						C⁰ = C[0, l, jₒ, jₛ]
 						C⁺ = C[1, l, jₒ, jₛ]
@@ -742,12 +807,12 @@ function kernel_uₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit
 				end
 
 				@timeit localtimer "kernel" begin
-				populatekernel!(Flow(), los, K,
+				populatekernel2!(Flow(), los, K,
 					SHModes,
 					Yjₒjₛ_lm_n₁n₂, Yjₒjₛ_lm_n₂n₁,
 					(l, m), (jₛ, jₒ, ω),
-					twoimagconjhωHγℓjₒjₛ_r₁r₂,
-					twoimagconjhωconjHγℓjₒjₛ_r₂r₁,
+					twoimagconjhωHγℓjₒjₛ_r₁r₂S,
+					twoimagconjhωconjHγℓjₒjₛ_r₂r₁S,
 					pre⁰, pre⁺, phase, temp)
 				end #timer
 			end
@@ -757,7 +822,10 @@ function kernel_uₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit
 	end
 
 	map(closeGfnfits, (Gfn_fits_files_src, Gfn_fits_files_obs1, Gfn_fits_files_obs2))
+	K = StructArray{ComplexF64}(map(x -> permutedims(x, [2,1,3]), (K.re, K.im)))
 	mulprefactor!(K, ind⁰)
+
+	println(localtimer)
 
 	return Array(no_offset_view(K))
 end
@@ -875,11 +943,11 @@ function kernel_uₛ₀_rθϕ_partial_2(localtimer, ℓ_ωind_iter_on_proc::Prod
 		@timeit localtimer "FITS" begin
 		# Green function about the source radius
 		read_Gfn_file_at_index!(Gsrc, Gfn_fits_files_src,
-		(ℓ_arr, 1:Nν_Gfn), (jₛ, ω_ind), NGfn_files_src, :, 1:2, srcindFITS(los), 1)
+		(ℓ_arr, 1:Nν_Gfn), (jₛ, ω_ind), NGfn_files_src, 1:2, srcindFITS(los), :, 1)
 
 		# Derivative of Green function about the source radius
 		read_Gfn_file_at_index!(drGsrc, Gfn_fits_files_src,
-		(ℓ_arr, 1:Nν_Gfn), (jₛ, ω_ind), NGfn_files_src, :, 1:2, srcindFITS(los), 2)
+		(ℓ_arr, 1:Nν_Gfn), (jₛ, ω_ind), NGfn_files_src, 1:2, srcindFITS(los), :, 2)
 		end # timer
 
 		Gα₂r_r₁_rₛ = αrcomp(Gsrc, r₁_ind, los)
@@ -895,7 +963,7 @@ function kernel_uₛ₀_rθϕ_partial_2(localtimer, ℓ_ωind_iter_on_proc::Prod
 			@timeit localtimer "FITS" begin
 			# Green functions based at the observation point
 			read_Gfn_file_at_index!(Gobs1, Gfn_fits_files_obs1,
-			(ℓ_arr, 1:Nν_Gfn), (jₒ, ω_ind), NGfn_files_obs1, :, 1:2, srcindFITS(los), 1)
+			(ℓ_arr, 1:Nν_Gfn), (jₒ, ω_ind), NGfn_files_obs1, 1:2, srcindFITS(los), :, 1)
 			end # timer
 
 			@timeit localtimer "radial term 1" begin
@@ -905,7 +973,7 @@ function kernel_uₛ₀_rθϕ_partial_2(localtimer, ℓ_ωind_iter_on_proc::Prod
 			if !obs_at_same_height
 				@timeit localtimer "FITS" begin
 					read_Gfn_file_at_index!(Gobs2, Gfn_fits_files_obs2,
-					(ℓ_arr, 1:Nν_Gfn), (jₒ, ω_ind), NGfn_files_obs2, :, 1:2, srcindFITS(los), 1)
+					(ℓ_arr, 1:Nν_Gfn), (jₒ, ω_ind), NGfn_files_obs2, 1:2, srcindFITS(los), :, 1)
 				end # timer
 
 				@timeit localtimer "radial term 1" begin
@@ -1032,17 +1100,10 @@ end
 function modetag(j_range, SHModes)
    "jmax$(maximum(j_range))_lmax$(l_max(SHModes))_mmax$(m_max(SHModes))"
 end
-function kernelfilenameuₛₜ(::TravelTimes, ::los_radial, j_range, SHModes, tag="")
-	"Kst_δτ_u_$(modetag(j_range, SHModes))"*string(tag)*".fits"
-end
-function kernelfilenameuₛₜ(::TravelTimes, ::los_earth, j_range, SHModes, tag="")
-	"Kst_δτ_u_$(modetag(j_range, SHModes))_los"*string(tag)*".fits"
-end
-function kernelfilenameuₛₜ(::Amplitudes, ::los_radial, j_range, SHModes, tag="")
-	"Kst_A_u_$(modetag(j_range, SHModes))"*string(tag)*".fits"
-end
-function kernelfilenameuₛₜ(::Amplitudes, ::los_earth, j_range, SHModes, tag="")
-	"Kst_A_u_$(modetag(j_range, SHModes))_los"*string(tag)*".fits"
+function kernelfilenameuₛₜ(m::SeismicMeasurement, los::los_direction, j_range, SHModes, tag="")
+	mtag = m isa TravelTimes ? "δτ" : "A"
+	lostag = los isa los_radial ? "" : "_los"
+	"Kst_$(mtag)_u_$(modetag(j_range, SHModes))$(lostag)"*string(tag)*".fits"
 end
 
 function kernel_uₛₜ(comm, m::SeismicMeasurement, xobs1, xobs2,
@@ -1183,14 +1244,14 @@ function populatekernelvalidation!(::SoundSpeed, ::los_earth, K::AbstractVector,
 
 	pre = dω/2π * ω^2 * Powspec(ω) * √(1/π)
 
-	for α₂ in 0:1, α₁ in 0:1
+	for r_ind in UnitRange(axes(K, 1))
+		for α₂ in 0:1, α₁ in 0:1
 
-		llY = pre * real(Y12j[α₁, α₂])
-		iszero(llY) && continue
+			llY = pre * real(Y12j[α₁, α₂])
+			iszero(llY) && continue
 
-		for r_ind in UnitRange(axes(K, 1))
 			K[r_ind] += real(conjhω *
-				( Hjj_r₁r₂[r_ind, α₁, α₂] + conj(Hjj_r₂r₁[r_ind, α₂, α₁]) ) ) * llY
+				( Hjj_r₁r₂[α₁, α₂, r_ind] + conj(Hjj_r₂r₁[α₂, α₁, r_ind]) ) ) * llY
 		end
 	end
 end
@@ -1204,14 +1265,14 @@ function populatekernelvalidation!(::SoundSpeed, ::los_earth, K::AbstractMatrix,
 		Yjn₂ = Y12j[n2ind]
 		conjhω_n2 = conjhω[n2ind]
 
-		for α₂ in 0:1, α₁ in 0:1
+		for r_ind in UnitRange(axes(K, 1))
+			for α₂ in 0:1, α₁ in 0:1
 
-			llY = pre * real(Yjn₂[α₁, α₂])
-			iszero(llY) && continue
+				llY = pre * real(Yjn₂[α₁, α₂])
+				iszero(llY) && continue
 
-			for r_ind in UnitRange(axes(K, 1))
 				K[r_ind, n2ind] += real(conjhω_n2 *
-					( Hjjω_r₁r₂[r_ind, α₁, α₂] + conj(Hjj_r₂r₁[r_ind, α₂, α₁]) ) ) * llY
+					( Hjjω_r₁r₂[α₁, α₂, r_ind] + conj(Hjj_r₂r₁[α₂, α₁, r_ind]) ) ) * llY
 			end
 		end
 	end
@@ -1253,22 +1314,22 @@ function kernel_δc₀₀_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSpl
 
 		# Green function about the source radius
 		read_Gfn_file_at_index!(Gsrc, Gfn_fits_files_src,
-			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, :, 1:2, srcindFITS(los), 1)
+			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, 1:2, srcindFITS(los), :, 1)
 
 		# Derivative of Green function about the source radius
 		read_Gfn_file_at_index!(drGsrc, Gfn_fits_files_src,
-			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, :, 1:1, srcindFITS(los), 2)
+			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, 1:1, srcindFITS(los), :, 2)
 
 		Gγr_r₁_rsrc = αrcomp(Gsrc, r₁_ind, los)
 		Gγr_r₂_rsrc = αrcomp(Gsrc, r₂_ind, los)
 
 		# Green function about receiver location
 		read_Gfn_file_at_index!(Gobs1, Gfn_fits_files_obs1,
-			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_obs1, :, 1:2, srcindFITS(los), 1)
+			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_obs1, 1:2, srcindFITS(los), :, 1)
 
 		# Derivative of Green function about receiver location
 		read_Gfn_file_at_index!(drGobs1, Gfn_fits_files_obs1,
-			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_obs1, :, 1:1, srcindFITS(los), 2)
+			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_obs1, 1:1, srcindFITS(los), :, 2)
 
 		radial_fn_isotropic_δc_firstborn!(fjj_r₁_rsrc,
 			Gsrc, drGsrc, divGsrc, Gobs1, drGobs1, divGobs, ℓ)
@@ -1278,11 +1339,11 @@ function kernel_δc₀₀_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSpl
 		if r₁_ind != r₂_ind
 			# Green function about receiver location
 			read_Gfn_file_at_index!(Gobs2, Gfn_fits_files_obs2,
-				(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_obs2, :, 1:2, srcindFITS(los), 1)
+				(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_obs2, 1:2, srcindFITS(los), :, 1)
 
 			# Derivative of Green function about receiver location
 			read_Gfn_file_at_index!(drGobs2, Gfn_fits_files_obs2,
-				(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_obs2, :, 1:1, srcindFITS(los), 2)
+				(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_obs2, 1:1, srcindFITS(los), :, 2)
 
 			radial_fn_isotropic_δc_firstborn!(fjj_r₂_rsrc,
 				Gsrc, drGsrc, divGsrc, Gobs2, drGobs2, divGobs, ℓ)
@@ -1336,21 +1397,21 @@ function kernel_δc₀₀_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSpl
 
 		# Green function about the source radius
 		read_Gfn_file_at_index!(Gsrc, Gfn_fits_files_src,
-			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, :, 1:2, srcindFITS(los), 1)
+			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, 1:2, srcindFITS(los), :, 1)
 
 		# Derivative of Green function about the source radius
 		read_Gfn_file_at_index!(drGsrc, Gfn_fits_files_src,
-			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, :, 1:1, srcindFITS(los), 2)
+			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, 1:1, srcindFITS(los), :, 2)
 
 		Gγr_robs_rsrc = αrcomp(Gsrc, r_obs_ind, los)
 
 		# Green function about receiver location
 		read_Gfn_file_at_index!(Gobs, Gfn_fits_files_obs,
-			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_obs, :, 1:2, srcindFITS(los), 1)
+			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_obs, 1:2, srcindFITS(los), :, 1)
 
 		# Derivative of Green function about receiver location
 		read_Gfn_file_at_index!(drGobs, Gfn_fits_files_obs,
-			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_obs, :, 1:1, srcindFITS(los), 2)
+			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_obs, 1:1, srcindFITS(los), :, 2)
 
 		radial_fn_isotropic_δc_firstborn!(f_robs_rsrc,
 			Gsrc, drGsrc, divGsrc, Gobs, drGobs, divGobs, ℓ)
@@ -1551,14 +1612,14 @@ function kernel_δcₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSpl
 
 		# Green function about the source radius
 		read_Gfn_file_at_index!(Gsrc, Gfn_fits_files_src,
-			(ℓ_arr, 1:Nν_Gfn), (jₛ, ω_ind), NGfn_files_src, :, 1:2, srcindFITS(los), 1)
+			(ℓ_arr, 1:Nν_Gfn), (jₛ, ω_ind), NGfn_files_src, 1:2, srcindFITS(los), :, 1)
 
 		Gαr_r₁_rsrc = αrcomp(Gsrc, r₁_ind, los)
 		Gαr_r₂_rsrc = αrcomp(Gsrc, r₂_ind, los)
 
 		# Derivative of Green function about the source radius
 		read_Gfn_file_at_index!(drGsrc, Gfn_fits_files_src,
-			(ℓ_arr, 1:Nν_Gfn), (jₛ, ω_ind), NGfn_files_src, :, 1:1, srcindFITS(los), 2)
+			(ℓ_arr, 1:Nν_Gfn), (jₛ, ω_ind), NGfn_files_src, 1:1, srcindFITS(los), :, 2)
 		end #localtimer
 
 		for jₒ in l2_range(jₒjₛ_allmodes, jₛ)
@@ -1582,10 +1643,10 @@ function kernel_δcₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSpl
 			if ω_ind != ω_ind_prev || jₒ ∉ l2_range(jₒjₛ_allmodes, jₛ-1)
 				# Green functions based at the observation point for ℓ′
 				read_Gfn_file_at_index!(Gobs1, Gfn_fits_files_obs1,
-				(ℓ_arr, 1:Nν_Gfn), (jₒ, ω_ind), NGfn_files_obs1, :, 1:2, srcindFITS(los), 1)
+				(ℓ_arr, 1:Nν_Gfn), (jₒ, ω_ind), NGfn_files_obs1, 1:2, srcindFITS(los), :, 1)
 
 				read_Gfn_file_at_index!(drGobs1, Gfn_fits_files_obs1,
-				(ℓ_arr, 1:Nν_Gfn), (jₒ, ω_ind), NGfn_files_obs1, :, 1:1, srcindFITS(los), 2)
+				(ℓ_arr, 1:Nν_Gfn), (jₒ, ω_ind), NGfn_files_obs1, 1:1, srcindFITS(los), :, 2)
 			end
 
 			end # timer
@@ -1610,10 +1671,10 @@ function kernel_δcₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSpl
 				@timeit localtimer "FITS" begin
 				if ω_ind != ω_ind_prev || jₒ ∉ l2_range(jₒjₛ_allmodes, jₛ-1)
 					read_Gfn_file_at_index!(Gobs2, Gfn_fits_files_obs2,
-					(ℓ_arr, 1:Nν_Gfn), (jₒ, ω_ind), NGfn_files_obs2, :, 1:2, srcindFITS(los), 1)
+					(ℓ_arr, 1:Nν_Gfn), (jₒ, ω_ind), NGfn_files_obs2, 1:2, srcindFITS(los), :, 1)
 
 					read_Gfn_file_at_index!(drGobs2, Gfn_fits_files_obs2,
-					(ℓ_arr, 1:Nν_Gfn), (jₒ, ω_ind), NGfn_files_obs2, :, 1:1, srcindFITS(los), 2)
+					(ℓ_arr, 1:Nν_Gfn), (jₒ, ω_ind), NGfn_files_obs2, 1:1, srcindFITS(los), :, 2)
 				end
 				end # timer
 

@@ -266,11 +266,11 @@ function Cω_partial(localtimer, ℓ_ωind_iter_on_proc, xobs1::Point3D, xobs2::
 
 		@timeit localtimer "FITS" begin
 			read_Gfn_file_at_index!(α_r₁, Gfn_fits_files_src,
-			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, r₁_ind, obsindFITS(los), 1, 1)
+			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, obsindFITS(los), 1, r₁_ind, 1)
 
 			if r₁_ind != r₂_ind
 				read_Gfn_file_at_index!(α_r₂, Gfn_fits_files_src,
-				(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, r₂_ind, obsindFITS(los), 1, 1)
+				(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, obsindFITS(los), 1, r₂_ind, 1)
 			end
 		end
 
@@ -565,7 +565,7 @@ function Cωℓ_spectrum_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSpli
 
 		# get the only element of a 0-dim array
 		read_Gfn_file_at_index!(α_r₁, Gfn_fits_files_src,
-			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, r₁_ind, obsindFITS(los), 1, 1)
+			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, obsindFITS(los), 1, r₁_ind, 1)
 
 		# m-averaged, so divided by 2ℓ+1
 		Cℓω[ℓ, ω_ind] = ω^2 * Powspec(ω) * 1/4π * abs2(α_r₁[])
@@ -657,10 +657,10 @@ function CΔϕω_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit,
 		ω = ω_arr[ω_ind]
 
 		read_Gfn_file_at_index!(α_r₁, Gfn_fits_files_src,
-		(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, r₁_ind, obsindFITS(los), 1, 1)
+		(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, obsindFITS(los), 1, r₁_ind, 1)
 		if r₁_ind != r₂_ind
 			read_Gfn_file_at_index!(α_r₂, Gfn_fits_files_src,
-			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, r₂_ind, obsindFITS(los), 1, 1)
+			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, obsindFITS(los), 1, r₂_ind, 1)
 		end
 
 		for ϕ_ind in 1:nϕ
@@ -764,13 +764,13 @@ function Cτ_rotating_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit,
 		ω = ω_arr[ω_ind]
 
 		read_Gfn_file_at_index!(α_r₁, Gfn_fits_files_src,
-				(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, r₁_ind, 1, 1, 1)
+				(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, 1, 1, r₁_ind, 1)
 
 		conjα₁_α₂ = complex(abs2(α_r₁[]))
 
 		if r₁_ind != r₂_ind
 			read_Gfn_file_at_index!(α_r₂, Gfn_fits_files_src,
-				(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, r₂_ind, 1, 1, 1)
+				(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, 1, 1, r₂_ind, 1)
 
 			conjα₁_α₂ = α_r₁[]*conj(α_r₂[])
 		end
@@ -921,30 +921,34 @@ function allocatearrays(::SoundSpeed, los::los_direction, obs_at_same_height)
 end
 
 function allocatearrays(::Flow, los::los_direction, obs_at_same_height)
-	Gsrc = zeros(ComplexF64, nr, 0:1, srcindG(los)...)
-	drGsrc = zeros(ComplexF64, nr, 0:1, srcindG(los)...)
-	Gobs1 = zeros(ComplexF64, nr, 0:1, srcindG(los)...)
+	Gsrc = zeros(ComplexF64, 0:1, srcindG(los)..., nr)
+	drGsrc = zeros(ComplexF64, 0:1, srcindG(los)..., nr)
+	Gobs1 = zeros(ComplexF64, 0:1, srcindG(los)..., nr)
 	Gobs2 = Gobs1
 
 	Gobs1_cache = Dict{Int, typeof(Gobs1)}()
 	Gobs2_cache = Dict{Int, typeof(Gobs2)}()
 
-	Gparts_r₁ = OffsetVector([zeros(ComplexF64, nr, 0:1, srcindG(los)...) for γ=0:1], 0:1)
-	Gparts_r₂ = obs_at_same_height ? Gparts_r₁ : OffsetVector(
-					[zeros(ComplexF64, nr, 0:1, srcindG(los)...) for γ=0:1], 0:1)
+	_G1 = zeros(0:1, srcindG(los)..., nr, 0:1);
+	Gparts_r₁ = StructArray{ComplexF64}((_G1, zero(_G1)));
+	# Gparts_r₁ = OffsetVector([zeros(ComplexF64, 0:1, srcindG(los)..., nr) for γ=0:1], 0:1)
+	Gparts_r₂ = obs_at_same_height ? Gparts_r₁ : zero(Gparts_r₁)
 
 	# This is Gγℓjₒjₛω_α₁0(r, r₁, rₛ) as computed in the paper
-	# Stored as Gγℓjₒjₛ_r₁[r,γ,αᵢ] = Gparts_r₁[γ][r, 0,αᵢ] + ζ(jₛ, jₒ, ℓ) Gparts_r₁[γ][:, 1,αᵢ]
-	Gγℓjₒjₛ_r₁ = zeros(ComplexF64, nr, 0:1, srcindG(los)...)
-	Gγℓjₒjₛ_r₂ = obs_at_same_height ? Gγℓjₒjₛ_r₁ : zero(Gγℓjₒjₛ_r₁)
+	# Stored as Gγℓjₒjₛ_r₁[r,γ,αᵢ] = Gparts_r₁[γ][r, 0, αᵢ] + ζ(jₛ, jₒ, ℓ) Gparts_r₁[γ][:, 1, αᵢ]
+	_G = zeros(obsindG(los)..., nr, 0:1);
+	Gγℓjₒjₛ_r₁ = StructArray{ComplexF64}((_G, zero(_G)));
+	Gγℓjₒjₛ_r₂ = obs_at_same_height ? Gγℓjₒjₛ_r₁ : zero(Gγℓjₒjₛ_r₁);
 
 	# This is given by Hγℓjₒjₛω_α₁α₂(r, r₁, r₂) = conj(Gγℓjₒjₛω_α₁0(r, r₁, rₛ)) * Gjₛω_α₂0(r₂, rₛ)
 	# Stored as Hγℓjₒjₛ_r₁r₂[r,γ,α₁,α₂] = conj(Gγℓjₒjₛ_r₁[r,γ,α₁]) * Gα₂r_r₂[α₂]
-	Hγℓjₒjₛ_r₁r₂ = zeros(ComplexF64, nr, 0:1, srcindG(los)..., obsindG(los)...)
-	Hγℓjₒjₛ_r₂r₁ = obs_at_same_height ? Hγℓjₒjₛ_r₁r₂ : zero(Hγℓjₒjₛ_r₁r₂)
+	# Hγℓjₒjₛ_r₁r₂ = zeros(ComplexF64, nr, 0:1, srcindG(los)..., obsindG(los)...)
+	_H = zeros(obsindG(los)..., obsindG(los)..., nr, 0:1);
+	Hγℓjₒjₛ_r₁r₂ = StructArray{ComplexF64}((_H, zero(_H)));
+	Hγℓjₒjₛ_r₂r₁ = obs_at_same_height ? Hγℓjₒjₛ_r₁r₂ : zero(Hγℓjₒjₛ_r₁r₂);
 
-	twoimagconjhωHγℓjₒjₛ_r₁r₂ = zeros(nr, 0:1, srcindG(los)..., obsindG(los)...)
-	twoimagconjhωconjHγℓjₒjₛ_r₂r₁ = zeros(nr, 0:1, srcindG(los)..., obsindG(los)...)
+	twoimagconjhωHγℓjₒjₛ_r₁r₂ = zeros(obsindG(los)..., obsindG(los)..., nr, 0:1)
+	twoimagconjhωconjHγℓjₒjₛ_r₂r₁ = zeros(obsindG(los)..., obsindG(los)..., nr, 0:1)
 
 	# temporary array to save the γ=-1 component that may be used to compute the γ=1 one
 	# the γ = 0 component is also stored here
@@ -952,12 +956,12 @@ function allocatearrays(::Flow, los::los_direction, obs_at_same_height)
 	temp = StructArray{ComplexF64}((zeros(nr), zeros(nr)));
 
 	# This is Gγℓjₒjₛ_r₁ for γ=1, used for the validation test
-	G¹₁jj_r₁ = zeros(ComplexF64, nr, srcindG(los)...)
+	G¹₁jj_r₁ = zeros(ComplexF64, srcindG(los)..., nr)
 	G¹₁jj_r₂ = obs_at_same_height ? G¹₁jj_r₁ : zero(G¹₁jj_r₁)
 
 	# Hjₒjₛαβ(r; r₁, r₂, rₛ) = conj(f_αjₒjₛ(r, r₁, rₛ)) Gβ0jₛ(r₂, rₛ)
 	# We only use this for the validation case of ℑu⁺, so jₒ = jₛ = j
-	H¹₁jj_r₁r₂ = zeros(ComplexF64, nr, srcindG(los)..., obsindG(los)...)
+	H¹₁jj_r₁r₂ = zeros(ComplexF64, srcindG(los)..., obsindG(los)..., nr)
 	H¹₁jj_r₂r₁ = obs_at_same_height ? H¹₁jj_r₁r₂ : zero(H¹₁jj_r₁r₂)
 
 	(; Gsrc, Gobs1, Gobs2, drGsrc,
@@ -1047,18 +1051,18 @@ function δCω_uniform_rotation_firstborn_integrated_over_angle_partial(
 
 		# Green function about source location
 		read_Gfn_file_at_index!(Gsrc, Gfn_fits_files_src,
-		(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, :, 1:2, srcindFITS(los), 1)
+		(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, 1:2, srcindFITS(los), :, 1)
 
 		# Green function about receiver location
 		read_Gfn_file_at_index!(Gobs1, Gfn_fits_files_obs1,
-			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_obs1, :, 1:2, srcindFITS(los), 1)
+			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_obs1, 1:2, srcindFITS(los), :, 1)
 
 		radial_fn_uniform_rotation_firstborn!(G¹₁jj_r₁, Gsrc, Gobs1, ℓ, los)
 
 		if r₁_ind != r₂_ind
 			# Green function about receiver location
 	    	read_Gfn_file_at_index!(Gobs2, Gfn_fits_files_obs2,
-			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_obs2, :, 1:2, srcindFITS(los), 1)
+			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_obs2, 1:2, srcindFITS(los), :, 1)
 
 			radial_fn_uniform_rotation_firstborn!(G¹₁jj_r₂, Gsrc, Gobs2, ℓ, los)
 		end
@@ -1298,22 +1302,22 @@ function δCω_isotropicδc_firstborn_integrated_over_angle_partial(localtimer,
 
 		# Green function about the source location
 		read_Gfn_file_at_index!(Gsrc, Gfn_fits_files_src,
-		(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, :, 1:2, srcindFITS(los), 1)
+		(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, 1:2, srcindFITS(los), :, 1)
 
 		Gγr_r₁_rsrc = αrcomp(Gsrc, r₁_ind, los)
 		Gγr_r₂_rsrc = αrcomp(Gsrc, r₂_ind, los)
 
 		# Derivative of Green function about the source location
 		read_Gfn_file_at_index!(drGsrc, Gfn_fits_files_src,
-		(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, :, 1:1, srcindFITS(los), 2)
+		(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, 1:1, srcindFITS(los), :, 2)
 
 		# Green function about the receiver location
 		read_Gfn_file_at_index!(Gobs1, Gfn_fits_files_obs1,
-			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_obs1, :, 1:2, srcindFITS(los), 1)
+			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_obs1, 1:2, srcindFITS(los), :, 1)
 
 		# Derivative of Green function about the receiver location
 		read_Gfn_file_at_index!(drGobs1, Gfn_fits_files_obs1,
-			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_obs1, :, 1:1, srcindFITS(los), 2)
+			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_obs1, 1:1, srcindFITS(los), :, 2)
 
 		radial_fn_isotropic_δc_firstborn!(fjₒjₛ_r₁_rsrc,
 			Gsrc, drGsrc, divGsrc, Gobs1, drGobs1, divGobs, ℓ)
@@ -1323,11 +1327,11 @@ function δCω_isotropicδc_firstborn_integrated_over_angle_partial(localtimer,
 		if r₁_ind != r₂_ind
 			# Green function about the receiver location
     		read_Gfn_file_at_index!(Gobs2, Gfn_fits_files_obs2,
-    			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_obs2, :, 1:2, srcindFITS(los), 1)
+    			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_obs2, 1:2, srcindFITS(los), :, 1)
 
     		# Derivative of Green function the about receiver location
     		read_Gfn_file_at_index!(drGobs2, Gfn_fits_files_obs2,
-    			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_obs2, :, 1:1, srcindFITS(los), 2)
+    			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_obs2, 1:1, srcindFITS(los), :, 2)
 
 			radial_fn_isotropic_δc_firstborn!(fjₒjₛ_r₂_rsrc,
 				Gsrc, drGsrc, divGsrc, Gobs2, drGobs2, divGobs, ℓ)

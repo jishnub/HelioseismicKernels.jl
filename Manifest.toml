@@ -45,6 +45,12 @@ version = "1.0.0"
 [[Base64]]
 uuid = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
 
+[[BenchmarkTools]]
+deps = ["JSON", "Logging", "Printf", "Statistics", "UUIDs"]
+git-tree-sha1 = "01ca3823217f474243cc2c8e6e1d1f45956fe872"
+uuid = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
+version = "1.0.0"
+
 [[BipolarSphericalHarmonics]]
 deps = ["LinearAlgebra", "SHTOOLS", "SphericalHarmonicArrays", "SphericalHarmonicModes", "SphericalHarmonics", "StaticArrays", "VectorSphericalHarmonics"]
 git-tree-sha1 = "6c553933829fba583c1ff355eaf56f4f9eb5b1a8"
@@ -304,6 +310,12 @@ deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
 git-tree-sha1 = "aac91e34ef4c166e0857e3d6052a3467e5732ceb"
 uuid = "e33a78d0-f292-5ffc-b300-72abe9b543c8"
 version = "2.4.1+0"
+
+[[HybridArrays]]
+deps = ["LinearAlgebra", "Requires", "StaticArrays"]
+git-tree-sha1 = "c1d5b1dcdf2140644e1c6beb9ca09fbed601c241"
+uuid = "1baab800-613f-4b0a-84e4-9cd3431bfbb9"
+version = "0.4.9"
 
 [[IfElse]]
 git-tree-sha1 = "28e837ff3e7a6c3cdb252ce49fb412c8eb3caeef"

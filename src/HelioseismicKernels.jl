@@ -11,6 +11,7 @@ using FastGaussQuadrature
 using FFTW
 using FileIO
 using FITSIO
+using HybridArrays
 using JLD2
 using LegendrePolynomials
 using LinearAlgebra
@@ -42,7 +43,7 @@ using VectorSphericalHarmonics
 using WignerD
 using WignerSymbols
 
-export TravelTimes, Amplitudes, SoundSpeed, Flows
+export TravelTimes, Amplitudes, SoundSpeed, Flow
 export Point2D, Point3D
 export los_radial, los_earth
 
