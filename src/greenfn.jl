@@ -58,17 +58,12 @@ function read_Gfn_file_at_index!(G::AbstractArray{<:Complex},
 	G_fits_dict::Dict, (ℓ_arr, ω_ind_arr)::Tuple{Vararg{AbstractUnitRange, 2}},
 	ℓω::NTuple{2, Int}, num_procs::Integer, I...)
 
-	proc_id_mode, ℓω_index_in_file = ParallelUtilities.whichproc_localindex((ℓ_arr, ω_ind_arr), ℓω, num_procs)
+	v = ParallelUtilities.whichproc_localindex((ℓ_arr, ω_ind_arr), ℓω, num_procs)
+	v === nothing && error("could not locate ℓω = $ℓω")
+	proc_id_mode, ℓω_index_in_file = v
 	G_file = G_fits_dict[proc_id_mode].hdu
 	read_Gfn_file_at_index!(G, G_file, I..., ℓω_index_in_file)
-end
-
-_maybetoreim(I1::Colon) = I1
-_maybetoreim(I1::Union{AbstractUnitRange,Integer}) = 2first(I1)-1:2last(I1)
-function _reimindices(I)
-	ind1 = _maybetoreim(I[1])
-	Itrailing = I[2:end]
-	return ind1, Itrailing
+	return G
 end
 
 function read_Gfn_file_at_index!(G::AbstractArray{<:Complex,0}, G_hdu::ImageHDU, I...)
@@ -80,17 +75,6 @@ function read_Gfn_file_at_index!(G, G_hdu::ImageHDU, I...)
 	read!(G_hdu, reinterpret_as_float(G), :, I...)
 	return G
 end
-
-function read_Gfn_file_at_index(G_file::Union{FITS, ImageHDU},
-	(ℓ_arr, ω_ind_arr)::NTuple{2, AbstractUnitRange},
-	ℓω::NTuple{2, Int}, num_procs::Integer, I...)
-
-	_, ℓω_index_in_file = ParallelUtilities.whichproc_localindex((ℓ_arr, ω_ind_arr), ℓω, num_procs)
-	read_Gfn_file_at_index(G_file, I..., ℓω_index_in_file)
-end
-
-read_Gfn_file_at_index(G_hdu::ImageHDU, I...) =
-	dropdims(reinterpret_as_complex(read(G_hdu, :, I...)), dims = 1)
 
 function Gfn_fits_files(path::String, proc_id_range::AbstractUnitRange)
 	function f(procid, path)

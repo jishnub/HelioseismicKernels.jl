@@ -29,9 +29,9 @@ version = "3.5.0+3"
 
 [[ArrayInterface]]
 deps = ["IfElse", "LinearAlgebra", "Requires", "SparseArrays", "Static"]
-git-tree-sha1 = "4e988d6883cf3935e267f93f53cfc34792e0700f"
+git-tree-sha1 = "045ff5e1bc8c6fb1ecb28694abba0a0d55b5f4f5"
 uuid = "4fba245c-0d91-5ea0-9b3e-6abc04ee57a9"
-version = "3.1.15"
+version = "3.1.17"
 
 [[Artifacts]]
 uuid = "56f22d72-fd6d-98f1-02f0-08ddc0907c33"
@@ -61,9 +61,9 @@ version = "1.1.1"
 
 [[CFITSIO_jll]]
 deps = ["Artifacts", "JLLWrappers", "LibCURL_jll", "Libdl", "Pkg"]
-git-tree-sha1 = "fefc33edbecf70e452179622f548050f1899fb47"
+git-tree-sha1 = "2fabb5fc48d185d104ca7ed7444b475705993447"
 uuid = "b3e40c51-02ae-5482-8a39-3ace5868dcf4"
-version = "3.49.0+0"
+version = "3.49.1+0"
 
 [[CSV]]
 deps = ["CategoricalArrays", "DataFrames", "Dates", "FilePathsBase", "Mmap", "Parsers", "PooledArrays", "Tables", "Unicode", "WeakRefStrings"]
@@ -250,9 +250,9 @@ version = "0.4.7"
 
 [[FileIO]]
 deps = ["Pkg", "Requires", "UUIDs"]
-git-tree-sha1 = "cfb694feaddf4f0381ef3cc9d4c0d8fc6b7e2ea7"
+git-tree-sha1 = "ca36405da56db2f4730b29cd2ad2bf5869baea3c"
 uuid = "5789e2e9-d7fb-5bc7-8068-2c6fae9b9549"
-version = "1.9.0"
+version = "1.9.1"
 
 [[FilePathsBase]]
 deps = ["Dates", "LinearAlgebra", "Printf", "Test", "UUIDs"]
@@ -415,9 +415,9 @@ uuid = "56ddb016-857b-54e1-b83d-db4d58db5568"
 
 [[LoopVectorization]]
 deps = ["ArrayInterface", "DocStringExtensions", "IfElse", "LinearAlgebra", "OffsetArrays", "Polyester", "Requires", "SLEEFPirates", "Static", "StrideArraysCore", "ThreadingUtilities", "UnPack", "VectorizationBase"]
-git-tree-sha1 = "ace64ab819aaba63fe06b90d50fe86942754da0a"
+git-tree-sha1 = "7d4237e46e44871d7ad39fab4e38d1e98df3f5c8"
 uuid = "bdcacae8-1622-11e9-2a5c-532679323890"
-version = "0.12.28"
+version = "0.12.34"
 
 [[LsqFit]]
 deps = ["Distributions", "ForwardDiff", "LinearAlgebra", "NLSolversBase", "OptimBase", "Random", "StatsBase"]
@@ -531,9 +531,9 @@ version = "4.1.1+0"
 
 [[OpenSpecFun_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "b9b8b8ed236998f91143938a760c2112dceeb2b4"
+git-tree-sha1 = "13652491f6856acfd2db29360e1bbcd4565d04f1"
 uuid = "efe28fd5-8261-553b-a9e1-b2916fc3738e"
-version = "0.5.4+0"
+version = "0.5.5+0"
 
 [[OptimBase]]
 deps = ["NLSolversBase", "Printf", "Reexport"]
@@ -554,9 +554,9 @@ version = "0.9.12"
 
 [[ParallelUtilities]]
 deps = ["DataStructures", "Distributed"]
-git-tree-sha1 = "f99c550db2cd22104e06768b31913c5dea1f8961"
+git-tree-sha1 = "6ccf56e85373e8277fd1d4b51c5aec7269e9167f"
 uuid = "fad6cfc8-4f83-11e9-06cc-151124046ad0"
-version = "0.8.3"
+version = "0.8.4"
 
 [[Parsers]]
 deps = ["Dates", "Test"]
@@ -751,9 +751,9 @@ version = "0.1.16"
 
 [[Static]]
 deps = ["IfElse"]
-git-tree-sha1 = "ddec5466a1d2d7e58adf9a427ba69763661aacf6"
+git-tree-sha1 = "2740ea27b66a41f9d213561a04573da5d3823d4b"
 uuid = "aedffcd0-7271-4cad-89d0-dc628f76c6d3"
-version = "0.2.4"
+version = "0.2.5"
 
 [[StaticArrays]]
 deps = ["LinearAlgebra", "Random", "Statistics"]
@@ -779,9 +779,9 @@ version = "0.9.8"
 
 [[StrideArraysCore]]
 deps = ["ArrayInterface", "Requires", "ThreadingUtilities", "VectorizationBase"]
-git-tree-sha1 = "42491616950994149c6abfa960340745fae309d1"
+git-tree-sha1 = "efcdfcbb8cf91e859f61011de1621be34b550e69"
 uuid = "7792a7ef-975c-4747-a70f-980b88e8d1da"
-version = "0.1.11"
+version = "0.1.13"
 
 [[StructArrays]]
 deps = ["Adapt", "DataAPI", "Tables"]
@@ -860,9 +860,9 @@ version = "0.1.7"
 
 [[VectorizationBase]]
 deps = ["ArrayInterface", "Hwloc", "IfElse", "Libdl", "LinearAlgebra", "Static"]
-git-tree-sha1 = "aac79bdce31bdca6374146d1df3897b057281020"
+git-tree-sha1 = "7c8974c7de377a2dc67e778017c78f96fc8f0fc6"
 uuid = "3d5dd08c-fd9d-11e8-17fa-ed2836048c2f"
-version = "0.20.13"
+version = "0.20.16"
 
 [[VersionParsing]]
 git-tree-sha1 = "80229be1f670524750d905f8fc8148e5a8c4537f"
