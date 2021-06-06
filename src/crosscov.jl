@@ -140,14 +140,21 @@ function los_projected_biposh(::los_earth, Y12, l1, l2)
 	return Y12
 end
 
+_biposh_returntype(v::AbstractArray) =  _biposh_returntype(typeof(v))
+_biposh_returntype(::Type{Vector{T}}) where {T} = Vector{_biposh_returntype(T)}
+_biposh_returntype(::Type{SHVector{T, Vector{T}, M}}) where {T,M} = (T2 = _biposh_returntype(T); SHVector{T2, Vector{T2}, M})
+_biposh_returntype(::Type{Union{Nothing, T}}) where {T} = Union{Nothing, _biposh_returntype(T)}
+_biposh_returntype(::Type{T}) where {T<:Number} = T
+_biposh_returntype(::Type{SVector{9,T}}) where {T<:Number} = OffsetMatrix{T,SMatrix{2,2,T,4}}
+
 biposh_spheroidal(Y::OffsetVector) =
 	OffsetArray(biposh_spheroidal(parent(Y)), axes(Y))
 function biposh_spheroidal(Y::SHVector)
 	SHArray(biposh_spheroidal(parent(Y)), SphericalHarmonicArrays.modes(Y))
 end
-biposh_spheroidal(Y::AbstractVector{<:Number}) = Y
+biposh_spheroidal(Y::Vector) = eltype(_biposh_returntype(Y))[biposh_spheroidal(Y[i]) for i in eachindex(Y)]
 biposh_spheroidal(Y::Number) = Y
-biposh_spheroidal(Y::Vector) = [biposh_spheroidal(Yi) for Yi in Y]
+biposh_spheroidal(::Nothing) = nothing
 function biposh_spheroidal(Y::SVector{9,<:Number})
 	T00 = Y[kronindex(GSH(), 0, 0)]
 	T10 = Y[kronindex(GSH(), 1, 0)] + Y[kronindex(GSH(), -1, 0)]
@@ -253,9 +260,9 @@ function Cω_partial(localtimer, ℓ_ωind_iter_on_proc, xobs1::Point3D, xobs2::
 
 	Cω_proc = zeros(ComplexF64, ν_ind_range)
 
-	ℓ_range = UnitRange(extremaelement(ℓ_ωind_iter_on_proc, dims = 1)...)
-
-	Y12 = los_projected_biposh_spheroidal(computeY₀₀, xobs1, xobs2, los, ℓ_range)
+	@timeit localtimer "biposh" begin
+		Y12 = los_projected_biposh_spheroidal(computeY₀₀, xobs1, xobs2, los, ℓ_ωind_iter_on_proc)
+	end
 
 	r₁_ind, r₂_ind = radial_grid_index.((xobs1, xobs2))
 
@@ -303,14 +310,13 @@ function Cω_partial(localtimer, ℓ_ωind_iter_on_proc,
 
 	Cω_proc = zeros(ComplexF64, length(nobs2_arr), ν_ind_range)
 
-	ℓ_range = UnitRange(extremaelement(ℓ_ωind_iter_on_proc, dims = 1)...)
-	Y12 = los_projected_biposh_spheroidal(computeY₀₀, nobs1, nobs2_arr, los, ℓ_range)
+	Y12 = los_projected_biposh_spheroidal(computeY₀₀, nobs1, nobs2_arr, los, ℓ_ωind_iter_on_proc)
 
 	for (ℓ, ω_ind) in ℓ_ωind_iter_on_proc
 		ω = ω_arr[ω_ind]
 
 		read_Gfn_file_at_index!(α_r₁, Gfn_fits_files_src,
-			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, r₁_ind, obsindFITS(los), 1, 1)
+			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, obsindFITS(los), 1, r₁_ind, 1)
 
 		for n2ind in axes(Cω_proc, 1)
 			Cω_proc[n2ind, ω_ind] += Cωℓ(los, ω, ℓ, α_r₁, α_r₁, Y12[n2ind, ℓ])
@@ -340,8 +346,7 @@ function ∂ϕ₂Cω_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit,
 
 	Cω_proc = zeros(ComplexF64, ν_ind_range)
 
-	ℓ_range = UnitRange(extremaelement(ℓ_ωind_iter_on_proc, dims = 1)...)
-	Y12 = los_projected_biposh_spheroidal(computeY₁₀, xobs1, xobs2, los, ℓ_range)
+	Y12 = los_projected_biposh_spheroidal(computeY₁₀, xobs1, xobs2, los, ℓ_ωind_iter_on_proc)
 
 	r₁_ind, r₂_ind = radial_grid_index.((xobs1, xobs2))
 
@@ -352,11 +357,11 @@ function ∂ϕ₂Cω_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit,
 		ω = ω_arr[ω_ind]
 
 		read_Gfn_file_at_index!(α_r₁, Gfn_fits_files_src,
-		(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, r₁_ind, obsindFITS(los), 1, 1)
+		(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, obsindFITS(los), 1, r₁_ind, 1)
 
 		if r₁_ind != r₂_ind
 			read_Gfn_file_at_index!(α_r₂, Gfn_fits_files_src,
-			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, r₂_ind, obsindFITS(los), 1, 1)
+			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, obsindFITS(los), 1, r₂_ind, 1)
 		end
 
 		Cω_proc[ω_ind] += Cωℓ(los, ω, ℓ, α_r₁, α_r₂, Y12[ℓ])
@@ -381,8 +386,7 @@ function ∂ϕ₂Cω_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit,
 
 	Cω_proc = zeros(ComplexF64, ν_ind_range)
 
-	ℓ_range = UnitRange(extremaelement(ℓ_ωind_iter_on_proc, dims = 1)...)
-	Y12 = los_projected_biposh_spheroidal(computeY₁₀, nobs1, nobs2_arr, los, ℓ_range)
+	Y12 = los_projected_biposh_spheroidal(computeY₁₀, nobs1, nobs2_arr, los, ℓ_ωind_iter_on_proc)
 
 	r_obs_ind = radial_grid_index(r_obs)
 
@@ -393,7 +397,7 @@ function ∂ϕ₂Cω_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit,
 		ω = ω_arr[ω_ind]
 
 		read_Gfn_file_at_index!(α_r₁, Gfn_fits_files_src,
-			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, r_obs_ind, obsindFITS(los), 1, 1)
+			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, obsindFITS(los), 1, r_obs_ind, 1)
 
 		for n2ind in eachindex(nobs2_arr)
 			Cω_proc[n2ind, ω_ind] += Cωℓ(los, ω, ℓ, α_r₁, α_r₂, Y12[n2ind, ℓ])
@@ -422,9 +426,8 @@ function Cω_∂ϕ₂Cω_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSpli
 
 	Cω_proc = zeros(ComplexF64, 0:1, ν_ind_range)
 
-	ℓ_range = UnitRange(extremaelement(ℓ_ωind_iter_on_proc, dims = 1)...)
-	Pl_cosχ = los_projected_biposh_spheroidal(computeY₀₀, xobs1, xobs2, los, ℓ_range)
-	∂ϕ₂Pl_cosχ = los_projected_biposh_spheroidal(computeY₁₀, xobs1, xobs2, los, ℓ_range)
+	Pl_cosχ = los_projected_biposh_spheroidal(computeY₀₀, xobs1, xobs2, los, ℓ_ωind_iter_on_proc)
+	∂ϕ₂Pl_cosχ = los_projected_biposh_spheroidal(computeY₁₀, xobs1, xobs2, los, ℓ_ωind_iter_on_proc)
 
 	@unpack α_r₁, α_r₂ = allocateGfn(los, r₁_ind == r₂_ind)
 
@@ -433,10 +436,10 @@ function Cω_∂ϕ₂Cω_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSpli
 		ω = ω_arr[ω_ind]
 
 		read_Gfn_file_at_index!(α_r₁, Gfn_fits_files_src,
-		(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, r₁_ind, obsindFITS(los), 1, 1)
+		(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, obsindFITS(los), 1, r₁_ind, 1)
 		if r₁_ind != r₂_ind
 			read_Gfn_file_at_index!(α_r₂, Gfn_fits_files_src,
-			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, r₂_ind, obsindFITS(los), 1, 1)
+			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, obsindFITS(los), 1, r₂_ind, 1)
 		end
 
 		f = Cωℓ(los, ω, ℓ, α_r₁, α_r₂, 1)
@@ -471,9 +474,8 @@ function Cω_∂ϕ₂Cω_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSpli
 	∂ϕ₂Pl_cosχ = zeros(0:lmax, length(nobs2_arr))
 	Pl_cosχ = zeros(0:lmax, length(nobs2_arr))
 
-	ℓ_range = UnitRange(extremaelement(ℓ_ωind_iter_on_proc, dims = 1)...)
-	Pl_cosχ = los_projected_biposh_spheroidal(computeY₀₀, nobs1, nobs2_arr, los, ℓ_range)
-	∂ϕ₂Pl_cosχ = los_projected_biposh_spheroidal(computeY₁₀, nobs1, nobs2_arr, los, ℓ_range)
+	Pl_cosχ = los_projected_biposh_spheroidal(computeY₀₀, nobs1, nobs2_arr, los, ℓ_ωind_iter_on_proc)
+	∂ϕ₂Pl_cosχ = los_projected_biposh_spheroidal(computeY₁₀, nobs1, nobs2_arr, los, ℓ_ωind_iter_on_proc)
 
 	@unpack α_r₁ = allocateGfn(los, true)
 
@@ -482,7 +484,7 @@ function Cω_∂ϕ₂Cω_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSpli
 		ω = ω_arr[ω_ind]
 
 		read_Gfn_file_at_index!(α_r₁, Gfn_fits_files_src,
-			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, r_obs_ind, obsindFITS(los), 1, 1)
+			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, obsindFITS(los), 1, r_obs_ind, 1)
 
 		f = Cωℓ(los_radial(), ω, ℓ, α_r₁, α_r₁, 1)
 
@@ -887,10 +889,10 @@ end
 #######################################################################################################################################
 
 function allocatearrays(::SoundSpeed, los::los_direction, obs_at_same_height)
-	Gsrc = zeros(ComplexF64, nr, 0:1, srcindG(los)...)
-	drGsrc = zeros(ComplexF64, nr, 0:0, srcindG(los)...)
-	Gobs1 = zeros(ComplexF64, nr, 0:1, srcindG(los)...)
-	drGobs1 = zeros(ComplexF64, nr, 0:0, srcindG(los)...)
+	Gsrc = zeros(ComplexF64, 0:1, srcindG(los)..., nr)
+	drGsrc = zeros(ComplexF64, 0:0, srcindG(los)..., nr)
+	Gobs1 = zeros(ComplexF64, 0:1, srcindG(los)..., nr)
+	drGobs1 = zeros(ComplexF64, 0:0, srcindG(los)..., nr)
 	Gobs2, drGobs2 = Gobs1, drGobs1
 
 	Gobs1_cache = Dict{Int, typeof(Gobs1)}()
@@ -898,18 +900,20 @@ function allocatearrays(::SoundSpeed, los::los_direction, obs_at_same_height)
 	Gobs2_cache = obs_at_same_height ? Gobs1_cache : Dict{Int, typeof(Gobs2)}()
 	drGobs2_cache = obs_at_same_height ? drGobs1_cache : Dict{Int, typeof(drGobs2)}()
 
-	divGsrc = zeros(ComplexF64, nr, srcindG(los)...)
-	divGobs = zeros(ComplexF64, nr, srcindG(los)...)
+	divGsrc = zeros(ComplexF64, srcindG(los)..., nr)
+	divGobs = zeros(ComplexF64, srcindG(los)..., nr)
 
 	# f_αjₒjₛ(r, rᵢ, rₛ) = -2ρc ∇⋅Gjₒ(r, rᵢ)_α ∇⋅Gjₛ(r, rₛ)_0
-	fjₒjₛ_r₁_rsrc = zeros(ComplexF64, nr, srcindG(los)...)
+	_f = zeros(srcindG(los)..., nr)
+	fjₒjₛ_r₁_rsrc = StructArray{ComplexF64}((_f, zero(_f)))
 	fjₒjₛ_r₂_rsrc = obs_at_same_height ? fjₒjₛ_r₁_rsrc : zero(fjₒjₛ_r₁_rsrc)
 
 	# H_βαjₒjₛ(r; r₁, r₂, rₛ) = conj(f_αjₒjₛ(r, r₁, rₛ)) Gβ0jₛ(r₂, rₛ)
-	Hjₒjₛω_r₁r₂ = zeros(ComplexF64, nr, obsindG(los)..., srcindG(los)...)
+	_H = zeros(obsindG(los)..., srcindG(los)..., nr)
+	Hjₒjₛω_r₁r₂ = StructArray{ComplexF64}((_H, zero(_H)))
 	Hjₒjₛω_r₂r₁ = obs_at_same_height ? Hjₒjₛω_r₁r₂ : zero(Hjₒjₛω_r₁r₂)
 
-	tworealconjhωHjₒjₛω_r₁r₂ = zeros(nr, obsindG(los)..., srcindG(los)...)
+	tworealconjhωHjₒjₛω_r₁r₂ = zeros(obsindG(los)..., srcindG(los)..., nr)
 	tworealconjhωconjHjₒjₛω_r₂r₁ = zero(tworealconjhωHjₒjₛω_r₁r₂)
 
 	(; Gsrc, drGsrc, Gobs1, drGobs1, Gobs2, drGobs2,
@@ -929,10 +933,14 @@ function allocatearrays(::Flow, los::los_direction, obs_at_same_height)
 	Gobs1_cache = Dict{Int, typeof(Gobs1)}()
 	Gobs2_cache = Dict{Int, typeof(Gobs2)}()
 
-	_G1 = zeros(0:1, srcindG(los)..., nr, 0:1);
-	Gparts_r₁ = StructArray{ComplexF64}((_G1, zero(_G1)));
-	# Gparts_r₁ = OffsetVector([zeros(ComplexF64, 0:1, srcindG(los)..., nr) for γ=0:1], 0:1)
-	Gparts_r₂ = obs_at_same_height ? Gparts_r₁ : zero(Gparts_r₁)
+	_G1 = zeros(0:1, srcindG(los)..., nr);
+	_G2 = StructArray{ComplexF64}((_G1, zero(_G1)));
+	Gparts_r₁ = OffsetVector([_G2, zero(_G2)], 0:1)
+	Gparts_r₂ = obs_at_same_height ? Gparts_r₁ : zero.(Gparts_r₁)
+
+	_G3 = zeros(0:1, srcindG(los)..., nr, 0:1);
+	Gparts_r₁_2 = StructArray{ComplexF64}((_G3, zero(_G3)))
+	Gparts_r₂_2 = obs_at_same_height ? Gparts_r₁_2 : zero(Gparts_r₁_2)
 
 	# This is Gγℓjₒjₛω_α₁0(r, r₁, rₛ) as computed in the paper
 	# Stored as Gγℓjₒjₛ_r₁[r,γ,αᵢ] = Gparts_r₁[γ][r, 0, αᵢ] + ζ(jₛ, jₒ, ℓ) Gparts_r₁[γ][:, 1, αᵢ]
@@ -950,11 +958,6 @@ function allocatearrays(::Flow, los::los_direction, obs_at_same_height)
 	twoimagconjhωHγℓjₒjₛ_r₁r₂ = zeros(obsindG(los)..., obsindG(los)..., nr, 0:1)
 	twoimagconjhωconjHγℓjₒjₛ_r₂r₁ = zeros(obsindG(los)..., obsindG(los)..., nr, 0:1)
 
-	# temporary array to save the γ=-1 component that may be used to compute the γ=1 one
-	# the γ = 0 component is also stored here
-	# temp = zeros(ComplexF64, nr)
-	temp = StructArray{ComplexF64}((zeros(nr), zeros(nr)));
-
 	# This is Gγℓjₒjₛ_r₁ for γ=1, used for the validation test
 	G¹₁jj_r₁ = zeros(ComplexF64, srcindG(los)..., nr)
 	G¹₁jj_r₂ = obs_at_same_height ? G¹₁jj_r₁ : zero(G¹₁jj_r₁)
@@ -966,8 +969,8 @@ function allocatearrays(::Flow, los::los_direction, obs_at_same_height)
 
 	(; Gsrc, Gobs1, Gobs2, drGsrc,
 		Gobs1_cache, Gobs2_cache,
-		temp,
 		Gparts_r₁, Gparts_r₂,
+		Gparts_r₁_2, Gparts_r₂_2,
 		Gγℓjₒjₛ_r₁, Gγℓjₒjₛ_r₂,
 		Hγℓjₒjₛ_r₁r₂, Hγℓjₒjₛ_r₂r₁,
 		twoimagconjhωconjHγℓjₒjₛ_r₂r₁,
@@ -981,28 +984,33 @@ end
 #######################################################################################################################################
 
 function δCωℓ_FB!(δC_r, ω_ind, ω, ℓ, Y12ℓ, Gsrc, G¹₁jj_r₂, G¹₁jj_r₁, r₁_ind, r₂_ind, ::los_radial)
-	G_r₁_rsrc = Gsrc[r₁_ind, 0]
-	G_r₂_rsrc = Gsrc[r₂_ind, 0]
+	G_r₁_rsrc = Gsrc[0, r₁_ind]
+	G_r₂_rsrc = Gsrc[0, r₂_ind]
 
 	pre = ω^3 * Powspec(ω) * Y12ℓ
 
-	@. δC_r[:, ω_ind] += pre *
-		(conj(G_r₁_rsrc) * G¹₁jj_r₂ + G_r₂_rsrc * conj(G¹₁jj_r₁))
+	for r_ind in UnitRange(axes(δC_r, 1))
+		δC_r[r_ind, ω_ind] += pre *
+			(conj(G_r₁_rsrc) * G¹₁jj_r₂[r_ind] + G_r₂_rsrc * conj(G¹₁jj_r₁[r_ind]))
+	end
 	return δC_r
 end
 
 function δCωℓ_FB!(δC_r, ω_ind, ω, ℓ, Y12ℓ, Gsrc, G¹₁jj_r₂, G¹₁jj_r₁, r₁_ind, r₂_ind, ::los_earth)
-	for β in 0:1, γ in 0:1
-		Gγ_r₁_rsrc = Gsrc[r₁_ind, γ, 0]
-		Gβ_r₂_rsrc = Gsrc[r₂_ind, β, 0]
+	pre = ω^3 * Powspec(ω)* Ω(ℓ, 0) * √(1/6)
+	for r_ind in UnitRange(axes(δC_r, 1))
+		s = zero(eltype(δC_r))
+		for β in 0:1, γ in 0:1
+			Gγ_r₁_rsrc = Gsrc[γ, 0, r₁_ind]
+			Gβ_r₂_rsrc = Gsrc[β, 0, r₂_ind]
 
-		gγ_r₁_rsrc = view(G¹₁jj_r₁, :, γ)
-		gβ_r₂_rsrc = view(G¹₁jj_r₂, :, β)
+			gγ_r₁_rsrc = G¹₁jj_r₁[γ, r_ind]
+			gβ_r₂_rsrc = G¹₁jj_r₂[β, r_ind]
 
-		pre = ω^3 * Powspec(ω)* Ω(ℓ, 0) * √(1/6) * Y12ℓ[γ,β]
+			s += (conj(Gγ_r₁_rsrc) * gβ_r₂_rsrc + Gβ_r₂_rsrc * conj(gγ_r₁_rsrc)) * Y12ℓ[γ, β]
+		end
 
-		@. δC_r[:, ω_ind] += pre *
-			(conj(Gγ_r₁_rsrc) * gβ_r₂_rsrc + conj(gγ_r₁_rsrc) * Gβ_r₂_rsrc)
+		δC_r[r_ind, ω_ind] += pre * s
 	end
 	return δC_r
 end
@@ -1040,10 +1048,9 @@ function δCω_uniform_rotation_firstborn_integrated_over_angle_partial(
 	δC_r = zeros(ComplexF64, nr, ν_ind_range)
 
 	arrs = allocatearrays(Flow(), los, r₁_ind == r₂_ind)
-	@unpack Gsrc, Gobs1, Gobs2, G¹₁jj_r₁, G¹₁jj_r₂ = arrs
+	@unpack Gsrc, Gobs1, Gobs2, G¹₁jj_r₁, G¹₁jj_r₂ = arrs;
 
-	ℓ_range = UnitRange(extremaelement(ℓ_ωind_iter_on_proc, dims = 1)...)
-	Y12 = los_projected_biposh_spheroidal(computeY₁₀, xobs1, xobs2, los, ℓ_range)
+	Y12 = los_projected_biposh_spheroidal(computeY₁₀, xobs1, xobs2, los, ℓ_ωind_iter_on_proc)
 
 	for (ℓ, ω_ind) in ℓ_ωind_iter_on_proc
 
@@ -1072,7 +1079,7 @@ function δCω_uniform_rotation_firstborn_integrated_over_angle_partial(
 
 	foreach(closeGfnfits, (Gfn_fits_files_src, Gfn_fits_files_obs1, Gfn_fits_files_obs2))
 
-	δCω = Ω_rot * _integrate_δCrω(δC_r, los)#* integrate(r, (@. r^2 * ρ * δC_r))
+	δCω = Ω_rot * _integrate_δCrω(δC_r, los)
 
 	parent(δCω)
 end
@@ -1252,8 +1259,12 @@ end
 
 function δC_FB_soundspeed!(δC_rω, ω_ind, ω, Y12ℓ, Hjₒjₛω_r₂r₁, Hjₒjₛω_r₁r₂, ::los_earth)
 	pre = ω^2 * Powspec(ω)
-	for β in 0:1, α in 0:1
-		@. δC_rω[:, ω_ind] += pre * Y12ℓ[α, β] * ( Hjₒjₛω_r₁r₂[:, α, β] + conj(Hjₒjₛω_r₂r₁[:, β, α]) )
+	for r_ind in eachindex(r)
+		YH = zero(eltype(Y12ℓ))
+		for β in 0:1, α in 0:1
+			YH += Y12ℓ[α, β] * ( Hjₒjₛω_r₁r₂[α, β, r_ind] + conj(Hjₒjₛω_r₂r₁[β, α, r_ind]) )
+		end
+		δC_rω[r_ind, ω_ind] += pre * YH
 	end
 	return δC_rω
 end
@@ -1293,8 +1304,7 @@ function δCω_isotropicδc_firstborn_integrated_over_angle_partial(localtimer,
 	@unpack Hjₒjₛω_r₁r₂, Hjₒjₛω_r₂r₁ = arrs
 	@unpack fjₒjₛ_r₁_rsrc, fjₒjₛ_r₂_rsrc = arrs
 
-	ℓ_range = UnitRange(extremaelement(ℓ_ωind_iter_on_proc, dims = 1)...)
-	Y12 = los_projected_biposh_spheroidal(computeY₀₀, xobs1, xobs2, los, ℓ_range)
+	Y12 = los_projected_biposh_spheroidal(computeY₀₀, xobs1, xobs2, los, ℓ_ωind_iter_on_proc)
 
 	for (ℓ, ω_ind) in ℓ_ωind_iter_on_proc
 
@@ -1412,7 +1422,7 @@ function δCω_isotropicδc_C_minus_C0_partial(localtimer,
 	Gfn_path_src_c′, NGfn_files_c′ =  p_G′src.path, p_G′src.num_procs
 	@unpack ℓ_arr, ω_arr, Nν_Gfn = p_Gsrc
 
-	ℓ_range, ν_ind_range = ParallelUtilities.getiterators(ℓ_ωind_iter_on_proc)
+	_, ν_ind_range = ParallelUtilities.getiterators(ℓ_ωind_iter_on_proc)
 
 	r₁_ind, r₂_ind = radial_grid_index.((xobs1, xobs2))
 
@@ -1434,8 +1444,7 @@ function δCω_isotropicδc_C_minus_C0_partial(localtimer,
 		G2_c0 = G1_c0
 	end
 
-	ℓ_range = UnitRange(extremaelement(ℓ_ωind_iter_on_proc, dims = 1)...)
-	Y12 = los_projected_biposh_spheroidal(computeY₀₀, xobs1, xobs2, los, ℓ_range)
+	Y12 = los_projected_biposh_spheroidal(computeY₀₀, xobs1, xobs2, los, ℓ_ωind_iter_on_proc)
 
 	for (ℓ, ω_ind) in ℓ_ωind_iter_on_proc
 
@@ -1443,32 +1452,33 @@ function δCω_isotropicδc_C_minus_C0_partial(localtimer,
 
 		# Green function about source location at observation point 1
 		read_Gfn_file_at_index!(G1_c0, Gfn_fits_files_src_c0,
-		(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_c0, r₁_ind, 1:2, 1, 1)
+		(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_c0, 1:2, 1, r₁_ind, 1)
 
 		read_Gfn_file_at_index!(G1_c′, Gfn_fits_files_src_c′,
-		(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_c′, r₁_ind, 1:2, 1, 1)
+		(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_c′, 1:2, 1, r₁_ind, 1)
 
 		# Green function about source location at observation point 2
 		if r₁_ind != r₂_ind
 			read_Gfn_file_at_index!(G2_c0, Gfn_fits_files_src_c0,
-			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_c0, r₂_ind, 1:2, 1, 1)
+			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_c0, 1:2, 1, r₂_ind, 1)
 
 			read_Gfn_file_at_index!(G2_c′, Gfn_fits_files_src_c′,
-			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_c′, r₂_ind, 1:2, 1, 1)
+			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_c′, 1:2, 1, r₂_ind, 1)
 		end
 
 		Y12ℓ = Y12[ℓ]
 
+		s = zero(eltype(Cω))
 		for β in 0:1, α in 0:1
 			GG_c0 = conj(G1_c0[α]) * G2_c0[β]
 			GG_c′ = conj(G1_c′[α]) * G2_c′[β]
 			δGG = GG_c′ - GG_c0
-			Cω[ω_ind] += ω^2 * Powspec(ω) * δGG * Y12ℓ[α, β]
+			s += δGG * Y12ℓ[α, β]
 		end
+		Cω[ω_ind] += ω^2 * Powspec(ω) * s
 	end
 
-	closeGfnfits(Gfn_fits_files_src_c′)
-	closeGfnfits(Gfn_fits_files_src_c0)
+	foreach(closeGfnfits, (Gfn_fits_files_src_c′, Gfn_fits_files_src_c0))
 
 	parent(Cω)
 end

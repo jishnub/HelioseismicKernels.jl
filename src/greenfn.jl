@@ -406,7 +406,7 @@ end
 get_numprocs(path) = load(joinpath(path, "parameters.jld2"), "num_procs")
 
 # Functions to compute Green function components in the helicity basis
-# We solve in the Hansen VSH basis first and change over to the helicity basis
+# We solve in the Hansen VSH basis first and change over to the PB basis
 
 function solve_for_components!(M, S, α, β)
 
@@ -613,12 +613,29 @@ function Gfn_reciprocity(; kwargs...)
 					pmapsum(summodes, modes_iter), [3, 2, 1])
 end
 
+#################################################################################
+# Functions that are used in computing the kernels
+#################################################################################
+
+_mulR(a::Complex, b::Complex) = real(a)*real(b) - imag(a)*imag(b)
+_mulI(a::Complex, b::Complex) = real(a)*imag(b) + imag(a)*real(b)
+
+_structarrayparent(S::StructArray{<:Complex}) = StructArray{eltype(S)}(map(parent, (S.re, S.im)))
+_structarrayparent(S::StructArray{<:Complex}, ::Type{T}) where {T} = StructArray{eltype(S)}(map(T∘parent, (S.re, S.im)))
+_structarrayparent(S::AbstractArray, ::Type{T}) where {T} = T(no_offset_view(parent(S)))
+_structarray(S::StructArray{<:Complex}, ::Type{T}) where {T} = StructArray{eltype(S)}(map(T, (S.re, S.im)))
+_structarray(S::AbstractArray, ::Type{T}) where {T} = T(no_offset_view(S))
+
 function divG_radial!(divG::AbstractVector, ℓ::Integer, G::AbstractMatrix, drG::AbstractMatrix)
 	# components in PB VSH basis
 	pre = -2Ω(ℓ, 0)
 
-	for r_ind in eachindex(divG)
-		divG[r_ind] = pre * G[r_ind, 1]/r[r_ind] + drG[r_ind, 0] + 2/r[r_ind]*G[r_ind, 0]
+	T = HybridArray{Tuple{2,StaticArrays.Dynamic()}}
+	GP = T(parent(G))
+	drGP = T(parent(drG))
+
+	@turbo for r_ind in eachindex(divG)
+		divG[r_ind] = pre * GP[2, r_ind]/r[r_ind] + drGP[1, r_ind] + 2/r[r_ind]*GP[1, r_ind]
 	end
 
 	divG
@@ -628,25 +645,52 @@ function divG_radial!(divG::AbstractMatrix, ℓ::Integer, G::AbstractArray{<:Any
 	# components in PB VSH basis
 	pre = -2Ω(ℓ, 0)
 
-	for r_ind in UnitRange(axes(divG, 2)), β in UnitRange(axes(G, 2))
-		divG[β, r_ind] = pre * G[1, β, r_ind]/r[r_ind] +
-		drG[0, β, r_ind] + 2/r[r_ind]*G[0, β, r_ind]
+	Tdiv = HybridArray{Tuple{2,StaticArrays.Dynamic()}}
+	divGP = Tdiv(parent(divG))
+
+	TG = HybridArray{Tuple{2,2,StaticArrays.Dynamic()}}
+	GP = TG(parent(G))
+	drGP = TG(parent(drG))
+
+	@turbo for r_ind in UnitRange(axes(divG, 2))
+		invr = 1/r[r_ind]
+		for β in UnitRange(axes(GP, 2))
+			divGP[β, r_ind] = pre * GP[2, β, r_ind]*invr + drGP[1, β, r_ind] + 2invr*GP[1, β, r_ind]
+		end
 	end
 
 	divG
 end
 
 # Radial components of dG for sound-speed perturbations
-function radial_fn_δc_firstborn!(f::AbstractVector{<:Complex},
+function radial_fn_δc_firstborn!(f::StructArray{<:Complex,1},
 	divGsrc::AbstractVector{<:Complex}, divGobs::AbstractVector{<:Complex})
 
-	@. f = -ρ * 2c * divGobs * divGsrc
+	@turbo for I in eachindex(f)
+		pre = -ρ[I] * 2c[I]
+		f.re[I] = pre * _mulR(divGobs[I], divGsrc[I])
+		f.im[I] = pre * _mulI(divGobs[I], divGsrc[I])
+	end
+	return f
 end
 
 function radial_fn_δc_firstborn!(f::AbstractMatrix{<:Complex},
 	divGsrc::AbstractVector{<:Complex}, divGobs::AbstractMatrix{<:Complex})
 
-	@. f = -ρ * 2c * divGobs * divGsrc
+	HT = HybridArray{Tuple{2,StaticArrays.Dynamic()}}
+	divGobsH = HT(parent(divGobs))
+
+	fR = HT(parent(f.re))
+	fI = HT(parent(f.im))
+
+	@turbo for r_ind in eachindex(r)
+		twoρcdivGsrc = -ρ[r_ind] * 2c[r_ind] * divGsrc[r_ind]
+		for obsind in axes(fR,1)
+			fR[obsind, r_ind] = _mulR(divGobsH[obsind, r_ind], twoρcdivGsrc)
+			fI[obsind, r_ind] = _mulI(divGobsH[obsind, r_ind], twoρcdivGsrc)
+		end
+	end
+	return f
 end
 
 function radial_fn_isotropic_δc_firstborn!(f, Gsrc::AA, drGsrc::AA, divGsrc,
@@ -689,18 +733,29 @@ end
 function Hjₒjₛω!(Hjₒjₛω_r₁r₂::AbstractArray{<:Any, 3},
 	fjₒjₛ_r₁_rsrc::AbstractMatrix, Grjₛ_r₂_rsrc::AbstractVector)
 
-	for r_ind in UnitRange(axes(fjₒjₛ_r₁_rsrc, 2)), γ in UnitRange(axes(Grjₛ_r₂_rsrc, 1))
-		Gγrjₛ_r₂_rsrc = Grjₛ_r₂_rsrc[γ]
-		for α in UnitRange(axes(fjₒjₛ_r₁_rsrc, 1))
-			Hjₒjₛω_r₁r₂[α, γ, r_ind] = conj(fjₒjₛ_r₁_rsrc[α, r_ind]) * Gγrjₛ_r₂_rsrc
+	HT = HybridArray{Tuple{2,2,StaticArrays.Dynamic()}}
+	HP = _structarrayparent(Hjₒjₛω_r₁r₂, HT)
+
+	FT = HybridArray{Tuple{2,StaticArrays.Dynamic()}}
+	FP = _structarrayparent(fjₒjₛ_r₁_rsrc, FT)
+
+	Grjₛ_r₂_rsrcP = no_offset_view(Grjₛ_r₂_rsrc)
+
+	@turbo for r_ind in axes(HP, 3), γ in axes(HP, 2)
+		Gγrjₛ_r₂_rsrc = Grjₛ_r₂_rsrcP[γ]
+		for α in axes(HP, 1)
+			HP[α, γ, r_ind] = conj(FP[α, r_ind]) * Gγrjₛ_r₂_rsrc
 		end
 	end
+	return Hjₒjₛω_r₁r₂
 end
 
 # Only radial component
 # H_00jₒjₛ(r; r₁, r₂, rₛ) = conj(f_0jₒjₛ(r, r₁, rₛ)) G00jₛ(r₂, rₛ)
 function Hjₒjₛω!(Hjₒjₛω_r₁r₂::AbstractVector, fjₒjₛ_r₁_rsrc::AbstractVector, Grrjₛ_r₂_rsrc)
-	@. Hjₒjₛω_r₁r₂ = conj(fjₒjₛ_r₁_rsrc) * Grrjₛ_r₂_rsrc
+	@turbo for I in CartesianIndices(Hjₒjₛω_r₁r₂)
+		Hjₒjₛω_r₁r₂[I] = conj(fjₒjₛ_r₁_rsrc[I]) * Grrjₛ_r₂_rsrc
+	end
 	return Hjₒjₛω_r₁r₂
 end
 
@@ -709,7 +764,7 @@ end
 function radial_fn_uniform_rotation_firstborn!(G::AbstractVector,
 	Gsrc::AA, Gobs::AA, j, ::los_radial) where {AA<:AbstractMatrix}
 
-	for r_ind in UnitRange(axes(Gsrc,3)),
+	for r_ind in UnitRange(axes(Gsrc,2))
 		G[r_ind] = Gsrc[0, r_ind] * Gobs[0, r_ind] -
 					Gsrc[0, r_ind] * Gobs[1, r_ind]/Ω(j, 0) -
 					Gsrc[1, r_ind]/Ω(j, 0) * Gobs[0, r_ind] +
@@ -730,98 +785,132 @@ function radial_fn_uniform_rotation_firstborn!(G::AbstractMatrix,
 	return G
 end
 
-function Gⱼₒⱼₛω_u⁺_firstborn!(G::AbstractMatrix,
-	Gsrc::AA, jₛ::Integer, Gobs::AA, jₒ::Integer, ::los_radial) where {AA<:AbstractMatrix}
+function Gⱼₒⱼₛω_u⁺_firstborn!(Gparts⁺, Gsrc, jₛ, Gobs, jₒ, ::los_radial)
 
 	# The actual G¹ₗⱼ₁ⱼ₂ω_00(r, rᵢ, rₛ) =  G[:, 0] + ζ(jₛ, jₒ, ℓ)G[:, 1]
 	# We store the terms separately and add them up for each ℓ
 
-	for r_ind in UnitRange(axes(G, 2))
-		G[0, r_ind] = Gsrc[0, r_ind] * Gobs[0, r_ind] -
-							Gsrc[0, r_ind] * Gobs[1, r_ind]/Ω(jₒ, 0) -
-							Gsrc[1, r_ind]/Ω(jₛ, 0) * Gobs[0, r_ind]
+	GT = HybridArray{Tuple{2,StaticArrays.Dynamic()}}
+	GsrcH = GT(parent(Gsrc))
+	GobsH = GT(parent(Gobs))
 
-		G[1, r_ind] = Gsrc[1, r_ind] * Gobs[1, r_ind]
+	GH = _structarrayparent(Gparts⁺, GT)
+
+	Ωjₒ0 = Ω(jₒ, 0)
+	Ωjₛ0 = Ω(jₛ, 0)
+
+	@turbo for r_ind in axes(GH, 2)
+		GH[1, r_ind] = GsrcH[1, r_ind] * GobsH[1, r_ind] -
+						GsrcH[1, r_ind] * GobsH[2, r_ind]/Ωjₒ0 -
+						GsrcH[2, r_ind] * GobsH[1, r_ind]/Ωjₛ0
+
+		GH[2, r_ind] = GsrcH[2, r_ind] * GobsH[2, r_ind]
 	end
-	return G
+	return Gparts⁺
 end
 
-function Gⱼₒⱼₛω_u⁺_firstborn!(G::AbstractArray{<:Any, 3},
-	Gsrc::AA, jₛ::Integer, Gobs::AA, jₒ::Integer,
-	::los_earth) where {AA<:AbstractArray{<:Any, 3}}
+function Gⱼₒⱼₛω_u⁺_firstborn!(Gparts⁺, Gsrc, jₛ, Gobs, jₒ, ::los_earth)
 
 	# The actual G¹ₗⱼ₁ⱼ₂ω_α₁0(r, rᵢ, rₛ) = G[:, 0, α₁] + ζ(jₛ, jₒ, ℓ)G[:, 1, α₁]
 	# We store the terms separately and add them up for each ℓ
 
-	for r_ind in UnitRange(axes(G, 3)), α₁ in UnitRange(axes(G, 2))
-		G[0, α₁, r_ind] = Gsrc[0, 0, r_ind] * Gobs[0, α₁, r_ind] -
-							Gsrc[0, 0, r_ind] * Gobs[1, α₁, r_ind]/Ω(jₒ, 0) -
-							Gsrc[1, 0, r_ind]/Ω(jₛ, 0) * Gobs[0, α₁, r_ind]
+	GT = HybridArray{Tuple{2,2,StaticArrays.Dynamic()}}
+	GsrcH = GT(parent(Gsrc))
+	GobsH = GT(parent(Gobs))
 
-		G[1, α₁, r_ind] = Gsrc[1, 0, r_ind] * Gobs[1, α₁, r_ind]
+	GH = _structarrayparent(Gparts⁺, GT)
+
+	Ωjₒ0 = Ω(jₒ, 0)
+	Ωjₛ0 = Ω(jₛ, 0)
+
+	@turbo for r_ind in axes(GH, 3), α₁ in axes(GH, 2)
+		GH[1, α₁, r_ind] = GsrcH[1, 1, r_ind] * GobsH[1, α₁, r_ind] -
+							GsrcH[1, 1, r_ind] * GobsH[2, α₁, r_ind]/Ωjₒ0 -
+							GsrcH[2, 1, r_ind] * GobsH[1, α₁, r_ind]/Ωjₛ0
+
+		GH[2, α₁, r_ind] = GsrcH[2, 1, r_ind] * GobsH[2, α₁, r_ind]
 	end
-	return G
+	return Gparts⁺
 end
 
-function Gⱼₒⱼₛω_u⁰_firstborn!(G::AbstractMatrix{<:Any},
-	drGsrc::AA, jₛ::Integer, Gobs::AA, jₒ::Integer, ::los_radial) where {AA<:AbstractMatrix}
+function Gⱼₒⱼₛω_u⁰_firstborn!(Gparts⁰, drGsrc, jₛ, Gobs, jₒ, ::los_radial)
 
-	# The actual G⁰ₗⱼ₁ⱼ₂ω_00(r, rᵢ, rₛ) =  G[:, 0] + ζ(jₛ, jₒ, ℓ)G[:, 1]
+	# The term corresponding to u⁰ is G⁰₀ ∂ᵣG⁰₀ + ζ(jₛ, jₒ, ℓ) G¹₀ ∂ᵣG¹₀
+	# We express this as G⁰ₗⱼ₁ⱼ₂ω_00(r, rᵢ, rₛ) =  G[:, 0] + ζ(jₛ, jₒ, ℓ)G[:, 1]
 	# We store the terms separately and add them up for each ℓ
 
-	@. G = Gobs * drGsrc
-	return G
+	GT = HybridArray{Tuple{2,StaticArrays.Dynamic()}}
+	drGsrcH = GT(parent(drGsrc))
+	GobsH = GT(parent(Gobs))
+
+	GH = _structarrayparent(Gparts⁰, GT)
+
+	@turbo for I in CartesianIndices(GH)
+		GH[I] = GobsH[I] * drGsrcH[I]
+	end
+	return Gparts⁰
 end
 
-function Gⱼₒⱼₛω_u⁰_firstborn!(G::AbstractArray{<:Any, 3},
-	drGsrc::AA, jₛ::Integer, Gobs::AA, jₒ::Integer, ::los_earth) where {AA<:AbstractArray{<:Any, 3}}
+function Gⱼₒⱼₛω_u⁰_firstborn!(Gparts⁰, drGsrc, jₛ, Gobs, jₒ, ::los_earth)
 
-	# The actual G⁰ₗⱼ₁ⱼ₂ω_α₁0(r, rᵢ, rₛ) = G[:, 0, α₁] + ζ(jₛ, jₒ, ℓ)G[:, 1, α₁]
+	# The term corresponding to u⁰ is G⁰α₁ ∂ᵣG⁰₀ + ζ(jₛ, jₒ, ℓ) G¹α₁ ∂ᵣG¹₀
+	# We express this as G⁰ₗⱼ₁ⱼ₂ω_α₁0(r, rᵢ, rₛ) = G[0, α₁, :] + ζ(jₛ, jₒ, ℓ)G[1, α₁, :]
 	# We store the terms separately and add them up for each ℓ
-	for r_ind in UnitRange(axes(Gobs, 3)), α₁ in UnitRange(axes(Gobs, 2)), ind in UnitRange(axes(G,1))
-		G[ind, α₁, r_ind] = Gobs[ind, α₁, r_ind] * drGsrc[ind, 0, r_ind]
+
+	GT = HybridArray{Tuple{2,2,StaticArrays.Dynamic()}}
+	GobsH = GT(parent(Gobs))
+	drGsrcH = GT(parent(drGsrc))
+
+	GH = _structarrayparent(Gparts⁰, GT)
+
+	@turbo for r_ind in axes(GH, 3), α₁ in axes(GH, 2), ind in axes(GH, 1)
+		GH[ind, α₁, r_ind] = GobsH[ind, α₁, r_ind] * drGsrcH[ind, 1, r_ind]
 	end
-	return G
+	return Gparts⁰
 end
 
 # This function computes Gparts
 # Components (0) and (+)
-function Gⱼₒⱼₛω_u⁰⁺_firstborn!(G, Gsrc, drGsrc, jₛ::Integer, Gobs, jₒ::Integer, los::los_direction)
-	Gⱼₒⱼₛω_u⁰_firstborn!(view(G, .., 0), drGsrc, jₛ, Gobs, jₒ, los)
-	Gⱼₒⱼₛω_u⁺_firstborn!(view(G, .., 1),  Gsrc, jₛ, Gobs, jₒ, los)
-	return G
+function Gⱼₒⱼₛω_u⁰⁺_firstborn!(Gparts, Gparts2, Gsrc, drGsrc, jₛ, Gobs, jₒ, los::los_direction)
+	Gⱼₒⱼₛω_u⁰_firstborn!(Gparts[0], drGsrc, jₛ, Gobs, jₒ, los)
+	Gⱼₒⱼₛω_u⁺_firstborn!(Gparts[1],  Gsrc, jₛ, Gobs, jₒ, los)
+	copyto!(Gparts2, 1, Gparts[0], 1, length(Gparts[0]))
+	copyto!(Gparts2, length(Gparts[0]) + 1, Gparts[1], 1, length(Gparts[1]))
+	return Gparts2
 end
 
-# We evaluate Gγₗⱼ₁ⱼ₂ω_00(r, rᵢ, rₛ) = Gsum[r,γ] = G[:, 0] + ζ(jₛ, jₒ, ℓ)G[:, 1]
+# We evaluate Gγₗⱼ₁ⱼ₂ω_00(r, rᵢ, rₛ) = Gsum[γ, r] = Gparts[0, :] + ζ(jₛ, jₒ, ℓ)G[1, :]
 # This function is run once for each ℓ using cached values of G
-function Gγₗⱼₒⱼₛω_α₁_firstborn!(Gγₗⱼₒⱼₛω_α₁::StructArray{<:Complex, 2}, Gparts::StructArray{<:Complex, 3}, jₒ, jₛ, ℓ)
+function Gγₗⱼₒⱼₛω_α₁_firstborn!(Gγₗⱼₒⱼₛω_α₁::AbstractMatrix, Gparts2, jₒ, jₛ, ℓ)
 
 	coeff = ζjₒjₛs( jₒ, jₛ, ℓ)
 
-	for γ in UnitRange(axes(Gγₗⱼₒⱼₛω_α₁, 2)), rind in UnitRange(axes(Gγₗⱼₒⱼₛω_α₁, 1))
-		Gγₗⱼₒⱼₛω_α₁.re[rind, γ] = Gparts.re[0, rind, γ] + coeff * Gparts.re[1, rind, γ]
-		Gγₗⱼₒⱼₛω_α₁.im[rind, γ] = Gparts.im[0, rind, γ] + coeff * Gparts.im[1, rind, γ]
+	GT = HybridArray{Tuple{StaticArrays.Dynamic(),2}}
+	G = _structarrayparent(Gγₗⱼₒⱼₛω_α₁, GT)
+
+	GPT = HybridArray{Tuple{2,StaticArrays.Dynamic(),2}}
+	GP = _structarrayparent(Gparts2, GPT)
+
+	@turbo for I in CartesianIndices(G)
+		G[I] = GP[1, I] + coeff * GP[2, I]
 	end
 	return Gγₗⱼₒⱼₛω_α₁
 end
 
 # We evaluate Gγₗⱼ₁ⱼ₂ω_α₁0(r, rᵢ, rₛ) = Gsum[r, γ, α₁] = G[:, 0, α₁] + ζ(jₛ, jₒ, ℓ)G[:, 1, α₁]
 # This function is run once for each ℓ using cached values of G
-function Gγₗⱼₒⱼₛω_α₁_firstborn!(Gγₗⱼₒⱼₛω_α₁::StructArray{<:Complex, 3}, Gparts::StructArray{<:Complex, 4}, jₒ, jₛ, ℓ)
+function Gγₗⱼₒⱼₛω_α₁_firstborn!(Gγₗⱼₒⱼₛω_α₁::StructArray{<:Complex, 3}, Gparts2, jₒ, jₛ, ℓ)
 
 	coeff = ζjₒjₛs( jₒ, jₛ, ℓ)
 
 	GT = HybridArray{Tuple{2,StaticArrays.Dynamic(),2}}
-	GR = GT(parent(Gγₗⱼₒⱼₛω_α₁.re))
-	GI = GT(parent(Gγₗⱼₒⱼₛω_α₁.im))
+	G = _structarrayparent(Gγₗⱼₒⱼₛω_α₁, GT)
 
 	GPT = HybridArray{Tuple{2,2,StaticArrays.Dynamic(),2}}
-	GPR = GPT(parent(Gparts.re))
-	GPI = GPT(parent(Gparts.im))
+	GP = _structarrayparent(Gparts2, GPT)
 
-	@turbo for I in CartesianIndices(GR)
-		GR[I] = GPR[1, I] + coeff * GPR[2, I]
-		GI[I] = GPI[1, I] + coeff * GPI[2, I]
+	@turbo for I in CartesianIndices(G)
+		G[I] = GP[1, I] + coeff * GP[2, I]
 	end
 	return Gγₗⱼₒⱼₛω_α₁
 end
@@ -830,36 +919,41 @@ end
 function Hγₗⱼₒⱼₛω_α₁α₂_firstborn!(H::StructArray{<:Complex, 2}, Gparts,
 	Gγₗⱼₒⱼₛω_α₁::AbstractMatrix{<:Complex}, Grr::Complex, jₒ, jₛ, ℓ)
 
+	HT = HybridArray{Tuple{StaticArrays.Dynamic(),2}}
+	HR = HT(parent(H.re))
+	HI = HT(parent(H.im))
+
+	GT = HybridArray{Tuple{StaticArrays.Dynamic(),2}}
+	GR = GT(parent(Gγₗⱼₒⱼₛω_α₁.re))
+	GI = GT(parent(Gγₗⱼₒⱼₛω_α₁.im))
+
 	Gγₗⱼₒⱼₛω_α₁_firstborn!(Gγₗⱼₒⱼₛω_α₁, Gparts, jₒ, jₛ, ℓ)
 	# @. H = conj(Gγₗⱼₒⱼₛω_α₁) * Grr
-	@. H.re = Gγₗⱼₒⱼₛω_α₁.re * real(Grr) + Gγₗⱼₒⱼₛω_α₁.im * imag(Grr)
-	@. H.im = Gγₗⱼₒⱼₛω_α₁.re * imag(Grr) - Gγₗⱼₒⱼₛω_α₁.im * real(Grr)
+	@turbo for I in CartesianIndices(HR)
+		HR[I] = GR[I] * real(Grr) + GI[I] * imag(Grr)
+		HI[I] = GR[I] * imag(Grr) - GI[I] * real(Grr)
+	end
 	return H
 end
 
 # We compute Hγₗⱼ₁ⱼ₂ω_α₁α₂(r, r₁, r₂, rₛ) = conj(Gγₗⱼ₁ⱼ₂ω_α₁0(r, r₁, rₛ)) * Gⱼ₂ω_α₂0(r₂, rₛ)
 function Hγₗⱼₒⱼₛω_α₁α₂_firstborn!(H::StructArray{<:Complex, 4}, Gparts,
-	Gγₗⱼₒⱼₛω_α₁_r₁::StructArray{<:Complex, 3}, G::AbstractVector{<:Complex}, jₒ, jₛ, ℓ)
+	Gγₗⱼₒⱼₛω_α₁::StructArray{<:Complex, 3}, G::AbstractVector{<:Complex}, jₒ, jₛ, ℓ)
 
-	Gγₗⱼₒⱼₛω_α₁_firstborn!(Gγₗⱼₒⱼₛω_α₁_r₁, Gparts, jₒ, jₛ, ℓ)
+	Gγₗⱼₒⱼₛω_α₁_firstborn!(Gγₗⱼₒⱼₛω_α₁, Gparts, jₒ, jₛ, ℓ)
 
 	HT = HybridArray{Tuple{2,2,StaticArrays.Dynamic(),2}}
-	HR = HT(parent(H.re))
-	HI = HT(parent(H.im))
+	HS = _structarrayparent(H, HT)
 
 	GT = HybridArray{Tuple{2,StaticArrays.Dynamic(),2}}
-	GR = GT(parent(Gγₗⱼₒⱼₛω_α₁_r₁.re))
-	GI = GT(parent(Gγₗⱼₒⱼₛω_α₁_r₁.im))
+	Gγₗⱼₒⱼₛω_α₁sH = _structarrayparent(Gγₗⱼₒⱼₛω_α₁, GT)
 
-	GsrcR = SVector{2}(real(G[0]), real(G[1]))
-	GsrcI = SVector{2}(imag(G[0]), imag(G[1]))
+	Gp = parent(G)
 
-	@turbo for γ in UnitRange(axes(HR, 4)), rind in UnitRange(axes(HR, 3)), obsind2 in UnitRange(axes(HR, 2))
-		GsrcR_obs2 = GsrcR[obsind2]
-		GsrcI_obs2 = GsrcI[obsind2]
-		for obsind1 in UnitRange(axes(HR, 1))
-			HR[obsind1, obsind2, rind, γ] = GR[obsind1, rind, γ] * GsrcR_obs2 + GI[obsind1, rind, γ] * GsrcI_obs2
-			HI[obsind1, obsind2, rind, γ] = GR[obsind1, rind, γ] * GsrcI_obs2 - GI[obsind1, rind, γ] * GsrcR_obs2
+	@turbo for γ in axes(HS, 4), rind in axes(HS, 3), obsind2 in axes(HS, 2)
+		Gsrc_obs2 = Gp[obsind2]
+		for obsind1 in axes(HS, 1)
+			HS[obsind1, obsind2, rind, γ] = conj(Gγₗⱼₒⱼₛω_α₁sH[obsind1, rind, γ]) * Gsrc_obs2
 		end
 	end
 	return H

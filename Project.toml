@@ -4,7 +4,6 @@ authors = ["Jishnu Bhattacharya", "Center for Space Science", "New York Universi
 version = "0.1.0"
 
 [deps]
-BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
 BipolarSphericalHarmonics = "e22a7426-82a6-487a-9ac6-2ced2976a2d6"
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
 DSP = "717857b8-e6f2-59f4-9121-6e50c889abd2"

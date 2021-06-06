@@ -52,14 +52,17 @@ function unpackGfnparams(p_Gsrc, r_src, p_Gobs1, r_obs1, p_Gobs2, r_obs2)
 		p_Gsrc, p_Gobs1, p_Gobs2)
 end
 
-function los_projected_spheroidal_biposh_flippoints(xobs1, xobs2, los, SHModes, jₒjₛ_allmodes, localtimer)
+function _biposh_flippoints(los::los_radial, xobs1, xobs2, SHModes, jₒjₛ_allmodes)
+	biposh_flippoints(SH(), Point2D(xobs1)..., Point2D(xobs2)..., SHModes, jₒjₛ_allmodes)
+end
+function _biposh_flippoints(los::los_earth, xobs1, xobs2, SHModes, jₒjₛ_allmodes)
+	biposh_flippoints(GSH(), Point2D(xobs1)..., Point2D(xobs2)..., SHModes, jₒjₛ_allmodes)
+end
+function los_projected_spheroidal_biposh_flippoints(xobs1, xobs2, los, SHModes, jₒjₛ_allmodes)
 	l1, l2 = line_of_sight_covariant.((xobs1, xobs2), los)
-	@timeit localtimer "BiPoSH" begin
-		_Y12, _Y21 = biposh_flippoints(los isa los_radial ? SH() : GSH(),
-		Point2D(xobs1)..., Point2D(xobs2)..., SHModes, jₒjₛ_allmodes)
-		Y12 = biposh_spheroidal(los_projected_biposh(los, _Y12, l1, l2))
-		Y21 = biposh_spheroidal(los_projected_biposh(los, _Y21, l2, l1))
-	end
+	_Y12, _Y21 = _biposh_flippoints(los, xobs1, xobs2, SHModes, jₒjₛ_allmodes)
+	Y12 = biposh_spheroidal(los_projected_biposh(los, _Y12, l1, l2))
+	Y21 = biposh_spheroidal(los_projected_biposh(los, _Y21, l2, l1))
 	return Y12, Y21
 end
 
@@ -251,6 +254,7 @@ kernelfilenameℑu⁺₁₀(::TravelTimes, ::los_earth) = "K_δτ_ℑu⁺₁₀_
 kernelfilenameℑu⁺₁₀(::Amplitudes, ::los_radial) = "K_A_ℑu⁺₁₀.fits"
 kernelfilenameℑu⁺₁₀(::Amplitudes, ::los_earth) = "K_A_ℑu⁺₁₀_los.fits"
 
+
 function kernel_ℑu⁺₁₀(comm, m::SeismicMeasurement, xobs1, xobs2, los::los_direction = los_radial(); kwargs...)
 	r_src, r_obs = read_rsrc_robs_c_scale(kwargs)
 	p_Gsrc, p_Gobs1, p_Gobs2 = read_parameters_for_points(xobs1, xobs2; kwargs...)
@@ -285,85 +289,12 @@ end
 # Kernels for flow velocity
 ########################################################################################
 
-function checkinds(T₂₁::AbstractArray{<:Any, 4}, vindT, α₁, α₂)
-	vindT in axes(T₂₁, 2) && α₁ in axes(T₂₁, 3) && α₂ in axes(T₂₁, 4)
-end
-checkinds(T₂₁::AbstractArray{<:Any, 2}, vindT) = vindT in axes(T₂₁, 2)
-
-@inline function addtemptoK!(K::AbstractArray{<:Real}, vind, modeind,
-	temp::AbstractArray{<:Real}, phase = 1, f = identity)
-	(vind in axes(K, 2) && modeind in axes(K, 3)) || error("indexing error with vind = $vind and modeind = $modeind")
-	for r_ind in eachindex(temp)
-		K[r_ind, vind, modeind] += phase * f(temp[r_ind])
-	end
-	return nothing
-end
-@inline function Kterm!(K::AbstractArray{<:Real}, vindK, modeind, vindT,
-	T₂₁::AbstractArray{<:Real}, P₂₁::Real, T₁₂::AbstractArray{<:Real}, P₁₂::Real)
-
-	(vindK in axes(K, 2) && modeind in axes(K, 3)) || return
-	(checkinds(T₁₂, vindT) && checkinds(T₂₁, vindT)) || return
-	for r_ind in UnitRange(axes(K, 1))
-		K[r_ind, vindK, modeind] += T₂₁[r_ind, vindT] * P₂₁ - T₁₂[r_ind, vindT] * P₁₂
-	end
-	return nothing
-end
-@inline function Kterm!(K::AbstractArray{<:Real}, vindK, modeind, vindT,
-	T₂₁::AbstractArray{<:Real}, P₂₁::Real, T₁₂::AbstractArray{<:Real}, P₁₂::Real, α₁, α₂)
-
-	(vindK in axes(K, 2) && modeind in axes(K, 3)) || return
-	(checkinds(T₁₂, vindT, α₁, α₂) && checkinds(T₂₁, vindT, α₁, α₂)) || return
-	for r_ind in UnitRange(axes(K, 1))
-		K[r_ind, vindK, modeind] += T₂₁[r_ind, vindT, α₁, α₂] * P₂₁ - T₁₂[r_ind, vindT, α₁, α₂] * P₁₂
-	end
-	return nothing
-end
-
-@inline function tempterm!(temp::AbstractArray{<:Real}, vindT,
-	T₂₁::AbstractArray{<:Real}, P₂₁::Real, T₁₂::AbstractArray{<:Real}, P₁₂::Real)
-
-	(checkinds(T₁₂, vindT) && checkinds(T₂₁, vindT)) || return
-	for r_ind in eachindex(temp)
-		temp[r_ind] = T₂₁[r_ind, vindT] * P₂₁ - T₁₂[r_ind, vindT] * P₁₂
-	end
-	return nothing
-end
-@inline function tempterm!(temp::AbstractArray{<:Real}, vindT,
-	T₂₁::AbstractArray{<:Real}, P₂₁::Real, T₁₂::AbstractArray{<:Real}, P₁₂::Real, α₁, α₂)
-
-	(checkinds(T₁₂, vindT, α₁, α₂) && checkinds(T₂₁, vindT, α₁, α₂)) || return
-	for r_ind in eachindex(temp)
-		temp[r_ind] += T₂₁[r_ind, vindT, α₁, α₂] * P₂₁ - T₁₂[r_ind, vindT, α₁, α₂] * P₁₂
-	end
-	return nothing
-end
-
-@inline function tempterm!(temp::StructArray{<:Complex}, vindT,
-	T₂₁::AbstractArray{<:Real}, P₂₁::Complex, T₁₂::AbstractArray{<:Real}, P₁₂::Complex, args...)
-	tempterm!(temp.re, vindT, T₂₁, real(P₂₁), T₁₂, real(P₁₂), args...)
-	tempterm!(temp.im, vindT, T₂₁, imag(P₂₁), T₁₂, imag(P₁₂), args...)
-	return nothing
-end
-@inline function Kterm!(K::StructArray{<:Complex}, vindK, modeind, vindT,
-	T₂₁::AbstractArray{<:Real}, P₂₁::Complex, T₁₂::AbstractArray{<:Real}, P₁₂::Complex, args...)
-
-	Kterm!(K.re, vindK, modeind, vindT, T₂₁, real(P₂₁), T₁₂, real(P₁₂), args...)
-	Kterm!(K.im, vindK, modeind, vindT, T₂₁, imag(P₂₁), T₁₂, imag(P₁₂), args...)
-	return nothing
-end
-
-@inline function addtemptoK!(K::StructArray{<:Complex}, vind, modeind,
-	temp::StructArray{<:Complex}, phase = 1, f = identity)
-	addtemptoK!(K.re, vind, modeind, temp.re, phase, f)
-	addtemptoK!(K.im, vind, modeind, temp.im, phase, f)
-	return nothing
-end
-
 @inline function mulprefactor!(K::AbstractArray{<:Real}, vindskip = 0)
-	K .*= ρ
+	@turbo @. K *= ρ
+	@assert axes(K,1) == eachindex(r) "first axis of K does not match that of r"
 	for lmind in UnitRange(axes(K, 3)), vind in UnitRange(axes(K, 2))
 		vind == vindskip && continue # radial component
-		for r_ind in eachindex(r)
+		@turbo for r_ind in eachindex(r)
 			K[r_ind, vind, lmind] /= r[r_ind]
 		end
 	end
@@ -378,7 +309,7 @@ function populatekernel!(::Flow, ::los_radial, K::AbstractArray{<:Complex,3},
 	(l, m), (jₛ, jₒ, ω),
 	twoimagconjhωHγℓjₒjₛ_r₁r₂,
 	twoimagconjhωconjHγℓjₒjₛ_r₂r₁,
-	pre⁰, pre⁺, phase, temp)
+	pre⁰, pre⁺, phase)
 
 	mode_ind = modeindex(firstshmodes(Yjₒjₛ_lm_n₁n₂), (l, m))
 
@@ -387,98 +318,48 @@ function populatekernel!(::Flow, ::los_radial, K::AbstractArray{<:Complex,3},
 
 	iszero(Pʲₒʲₛₗₘ_₀₀_n₁n₂) && iszero(Pʲₒʲₛₗₘ_₀₀_n₂n₁) && return
 
-	pre⁰Pʲₒʲₛₗₘ_₀₀_n₁n₂ = pre⁰ * Pʲₒʲₛₗₘ_₀₀_n₁n₂
-	pre⁺Pʲₒʲₛₗₘ_₀₀_n₁n₂ = pre⁺ * Pʲₒʲₛₗₘ_₀₀_n₁n₂
+	anyzeromom = l == 0 || jₛ == 0
+	evenmom = iseven(jₒ + jₛ + l)
 
-	pre⁰Pʲₒʲₛₗₘ_₀₀_n₂n₁ = pre⁰ * Pʲₒʲₛₗₘ_₀₀_n₂n₁
-	pre⁺Pʲₒʲₛₗₘ_₀₀_n₂n₁ = pre⁺ * Pʲₒʲₛₗₘ_₀₀_n₂n₁
-
-	mode_ind_K = modeindex(SHModes, (l, m))
-
-	minusindK, zeroindK, plusindK = axes(K, 2)
 	zeroindT, plusindT = axes(twoimagconjhωconjHγℓjₒjₛ_r₂r₁, 2)
+	minusindK, zeroindK, plusindK = axes(K, 1)
+	lm_ind_K = modeindex(SHModes, (l, m))
 
-	if iseven(jₒ + jₛ + l)
-		Kterm!(K, zeroindK, mode_ind_K, zeroindT,
-			twoimagconjhωconjHγℓjₒjₛ_r₂r₁, pre⁰Pʲₒʲₛₗₘ_₀₀_n₂n₁,
-			twoimagconjhωHγℓjₒjₛ_r₁r₂, pre⁰Pʲₒʲₛₗₘ_₀₀_n₁n₂)
+	if evenmom
+		@turbo for r_ind in eachindex(r)
+			TP₁₂⁰ = pre⁰ * Pʲₒʲₛₗₘ_₀₀_n₁n₂ * twoimagconjhωHγℓjₒjₛ_r₁r₂[r_ind, zeroindT]
+			TP₂₁⁰ = pre⁰ * Pʲₒʲₛₗₘ_₀₀_n₂n₁ * twoimagconjhωconjHγℓjₒjₛ_r₂r₁[r_ind, zeroindT]
+
+
+			K.re[zeroindK, r_ind, lm_ind_K] += evenmom * (real(TP₂₁⁰) - real(TP₁₂⁰))
+			K.im[zeroindK, r_ind, lm_ind_K] += evenmom * (imag(TP₂₁⁰) - imag(TP₁₂⁰))
+		end
+	end
+	anyzeromom && return K
+	@turbo for r_ind in eachindex(r)
+		TP₁₂¹ = pre⁺ * Pʲₒʲₛₗₘ_₀₀_n₁n₂ * twoimagconjhωHγℓjₒjₛ_r₁r₂[r_ind, plusindT]
+		TP₂₁¹ = pre⁺ * Pʲₒʲₛₗₘ_₀₀_n₂n₁ * twoimagconjhωconjHγℓjₒjₛ_r₂r₁[r_ind, plusindT]
+
+		tempre = real(TP₂₁¹) - real(TP₁₂¹)
+		tempim = imag(TP₂₁¹) - imag(TP₁₂¹)
+
+		K.re[plusindK, r_ind, lm_ind_K] += tempre
+		K.im[plusindK, r_ind, lm_ind_K] += tempim
+		K.re[minusindK, r_ind, lm_ind_K] += phase * tempre
+		K.im[minusindK, r_ind, lm_ind_K] += phase * tempim
 	end
 
-	# l = 0 only has γ=0
-	(l == 0 || jₛ == 0) && return
-
-	tempterm!(temp, plusindT,
-		twoimagconjhωconjHγℓjₒjₛ_r₂r₁, pre⁺Pʲₒʲₛₗₘ_₀₀_n₂n₁,
-		twoimagconjhωHγℓjₒjₛ_r₁r₂, pre⁺Pʲₒʲₛₗₘ_₀₀_n₁n₂)
-
-	addtemptoK!(K, plusindK, mode_ind_K, temp)
-	addtemptoK!(K, minusindK, mode_ind_K, temp, phase)
-
-	return nothing
+	return K
 end
-
 function populatekernel!(::Flow, ::los_earth, K::AbstractArray{<:Complex,3},
 	SHModes, Yjₒjₛ_lm_n₁n₂, Yjₒjₛ_lm_n₂n₁,
 	(l, m), (jₛ, jₒ, ω),
 	twoimagconjhωHγℓjₒjₛ_r₁r₂,
 	twoimagconjhωconjHγℓjₒjₛ_r₂r₁,
-	pre⁰, pre⁺, phase, temp)
+	pre⁰, pre⁺, phase)
 
 	mode_ind = modeindex(firstshmodes(Yjₒjₛ_lm_n₁n₂), (l, m))
-	mode_ind_K = modeindex(SHModes, (l, m))
-
-	_Yjₒjₛ_lm_n₁n₂ = Yjₒjₛ_lm_n₁n₂[mode_ind]
-	_Yjₒjₛ_lm_n₂n₁ = Yjₒjₛ_lm_n₂n₁[mode_ind]
-
-	# temp holds the tangential (+) component
-	fill!(temp, zero(eltype(temp)))
-
-	minusindK, zeroindK, plusindK = axes(K, 2)
-	zeroindT, plusindT = axes(twoimagconjhωconjHγℓjₒjₛ_r₂r₁, 2)
-
-	for α₂ = 0:1, α₁ = 0:1
-
-		Pʲₒʲₛₗₘ_α₁α₂_n₁n₂ = _Yjₒjₛ_lm_n₁n₂[α₁, α₂]
-		Pʲₒʲₛₗₘ_α₁α₂_n₂n₁ = _Yjₒjₛ_lm_n₂n₁[α₁, α₂]
-		iszero(Pʲₒʲₛₗₘ_α₁α₂_n₁n₂) && iszero(Pʲₒʲₛₗₘ_α₁α₂_n₂n₁) && continue
-
-		pre⁰Pʲₒʲₛₗₘ_α₁α₂_n₁n₂ = pre⁰ * Pʲₒʲₛₗₘ_α₁α₂_n₁n₂
-		pre⁺Pʲₒʲₛₗₘ_α₁α₂_n₁n₂ = pre⁺ * Pʲₒʲₛₗₘ_α₁α₂_n₁n₂
-
-		pre⁰Pʲₒʲₛₗₘ_α₁α₂_n₂n₁ = pre⁰ * Pʲₒʲₛₗₘ_α₁α₂_n₂n₁
-		pre⁺Pʲₒʲₛₗₘ_α₁α₂_n₂n₁ = pre⁺ * Pʲₒʲₛₗₘ_α₁α₂_n₂n₁
-
-		if iseven(jₒ + jₛ + l)
-			Kterm!(K, zeroindK, mode_ind_K, zeroindT,
-			twoimagconjhωconjHγℓjₒjₛ_r₂r₁, pre⁰Pʲₒʲₛₗₘ_α₁α₂_n₂n₁,
-			twoimagconjhωHγℓjₒjₛ_r₁r₂, pre⁰Pʲₒʲₛₗₘ_α₁α₂_n₁n₂, α₁, α₂)
-		end
-
-		((l == 0) || (jₛ == 0)) && continue
-
-		tempterm!(temp, plusindT,
-		twoimagconjhωconjHγℓjₒjₛ_r₂r₁, pre⁺Pʲₒʲₛₗₘ_α₁α₂_n₂n₁,
-		twoimagconjhωHγℓjₒjₛ_r₁r₂, pre⁺Pʲₒʲₛₗₘ_α₁α₂_n₁n₂, α₁, α₂)
-	end
-
-	((l == 0) || (jₛ == 0)) && return
-
-	addtemptoK!(K, plusindK, mode_ind_K, temp)
-	addtemptoK!(K, minusindK, mode_ind_K, temp, phase)
-
-	return nothing
-end
-
-populatekernel2!(::Flow, ::los_radial, args...) = populatekernel!(Flow(), los_radial(), args...)
-function populatekernel2!(::Flow, ::los_earth, K::AbstractArray{<:Complex,3},
-	SHModes, Yjₒjₛ_lm_n₁n₂, Yjₒjₛ_lm_n₂n₁,
-	(l, m), (jₛ, jₒ, ω),
-	twoimagconjhωHγℓjₒjₛ_r₁r₂,
-	twoimagconjhωconjHγℓjₒjₛ_r₂r₁,
-	pre⁰, pre⁺, phase, temp)
-
-	mode_ind = modeindex(firstshmodes(Yjₒjₛ_lm_n₁n₂), (l, m))
-	mode_ind_K = modeindex(SHModes, (l, m))
+	lm_ind_K = modeindex(SHModes, (l, m))
 
 	_Yjₒjₛ_lm_n₁n₂ = parent(Yjₒjₛ_lm_n₁n₂[mode_ind])
 	_Yjₒjₛ_lm_n₂n₁ = parent(Yjₒjₛ_lm_n₂n₁[mode_ind])
@@ -488,128 +369,114 @@ function populatekernel2!(::Flow, ::los_earth, K::AbstractArray{<:Complex,3},
 
 	anyzeromom = l == 0 || jₛ == 0
 	evenmom = iseven(jₒ + jₛ + l)
+	if evenmom
+		@turbo for r_ind in eachindex(r)
+			TP₁₂⁰ = pre⁰ * sum(_Yjₒjₛ_lm_n₁n₂ .* twoimagconjhωHγℓjₒjₛ_r₁r₂[r_ind, zeroindT])
+			TP₂₁⁰ = pre⁰ * sum(_Yjₒjₛ_lm_n₂n₁ .* twoimagconjhωconjHγℓjₒjₛ_r₂r₁[r_ind, zeroindT])
 
+			K.re[zeroindK, r_ind, lm_ind_K] += real(TP₂₁⁰) - real(TP₁₂⁰)
+			K.im[zeroindK, r_ind, lm_ind_K] += imag(TP₂₁⁰) - imag(TP₁₂⁰)
+		end
+	end
+	anyzeromom && return K
 	@turbo for r_ind in eachindex(r)
-		TP₁₂⁰ = pre⁰ * sum(_Yjₒjₛ_lm_n₁n₂ .* twoimagconjhωHγℓjₒjₛ_r₁r₂[r_ind, zeroindT])
-		TP₂₁⁰ = pre⁰ * sum(_Yjₒjₛ_lm_n₂n₁ .* twoimagconjhωconjHγℓjₒjₛ_r₂r₁[r_ind, zeroindT])
 		TP₁₂¹ = pre⁺ * sum(_Yjₒjₛ_lm_n₁n₂ .* twoimagconjhωHγℓjₒjₛ_r₁r₂[r_ind, plusindT])
 		TP₂₁¹ = pre⁺ * sum(_Yjₒjₛ_lm_n₂n₁ .* twoimagconjhωconjHγℓjₒjₛ_r₂r₁[r_ind, plusindT])
 
-		K.re[zeroindK, r_ind, mode_ind_K] += evenmom * (real(TP₂₁⁰) - real(TP₁₂⁰))
-		K.im[zeroindK, r_ind, mode_ind_K] += evenmom * (imag(TP₂₁⁰) - imag(TP₁₂⁰))
+		tempre = real(TP₂₁¹) - real(TP₁₂¹)
+		tempim = imag(TP₂₁¹) - imag(TP₁₂¹)
 
-		tempre = !anyzeromom * (real(TP₂₁¹) - real(TP₁₂¹))
-		tempim = !anyzeromom * (imag(TP₂₁¹) - imag(TP₁₂¹))
-
-		K.re[plusindK, r_ind, mode_ind_K] += tempre
-		K.im[plusindK, r_ind, mode_ind_K] += tempim
-		K.re[minusindK, r_ind, mode_ind_K] += phase * tempre
-		K.im[minusindK, r_ind, mode_ind_K] += phase * tempim
+		K.re[plusindK, r_ind, lm_ind_K] += tempre
+		K.im[plusindK, r_ind, lm_ind_K] += tempim
+		K.re[minusindK, r_ind, lm_ind_K] += phase * tempre
+		K.im[minusindK, r_ind, lm_ind_K] += phase * tempim
 	end
 
-	return nothing
+	return K
 end
 
 function populatekernelrθϕl0!(::Flow, ::los_radial, K::AbstractArray{<:Real, 3},
 	SHModes, Yjₒjₛ_lm_n₁n₂, Yjₒjₛ_lm_n₂n₁,
 	(l,_), (jₛ, jₒ, ω), twoimagconjhωconjHγℓjₒjₛ_r₂r₁, twoimagconjhωHγℓjₒjₛ_r₁r₂,
-	pre⁰, pre⁺, phase, temp::StructArray{<:Complex})
+	pre⁰, pre⁺, phase)
 
 	lm_ind_K = modeindex(SHModes, (l, 0))
 	lm_ind = modeindex(firstshmodes(Yjₒjₛ_lm_n₁n₂), (l, 0))
 	Pʲₒʲₛₗₘ_₀₀_n₁n₂ = Yjₒjₛ_lm_n₁n₂[lm_ind]
 	Pʲₒʲₛₗₘ_₀₀_n₂n₁ = Yjₒjₛ_lm_n₂n₁[lm_ind]
 
-	iszero(Pʲₒʲₛₗₘ_₀₀_n₁n₂) && iszero(Pʲₒʲₛₗₘ_₀₀_n₂n₁) && return
-
-	pre⁰Pʲₒʲₛₗₘ_₀₀_n₁n₂ = real(pre⁰ * Pʲₒʲₛₗₘ_₀₀_n₁n₂)
-	pre⁺Pʲₒʲₛₗₘ_₀₀_n₁n₂ = pre⁺ * Pʲₒʲₛₗₘ_₀₀_n₁n₂
-
-	pre⁰Pʲₒʲₛₗₘ_₀₀_n₂n₁ = real(pre⁰ * Pʲₒʲₛₗₘ_₀₀_n₂n₁)
-	pre⁺Pʲₒʲₛₗₘ_₀₀_n₂n₁ = pre⁺ * Pʲₒʲₛₗₘ_₀₀_n₂n₁
-
-	rindK, θindK, ϕindK = axes(K, 2)
+	rindK, θindK, ϕindK = axes(K, 1)
 	zeroindT, plusindT = axes(twoimagconjhωconjHγℓjₒjₛ_r₂r₁, 2)
 
-	if iseven(jₒ + jₛ + l)
-		Kterm!(K, rindK, lm_ind_K, zeroindT,
-			twoimagconjhωconjHγℓjₒjₛ_r₂r₁, pre⁰Pʲₒʲₛₗₘ_₀₀_n₂n₁,
-			twoimagconjhωHγℓjₒjₛ_r₁r₂, pre⁰Pʲₒʲₛₗₘ_₀₀_n₁n₂)
+	anyzeromom = l == 0 || jₛ == 0
+	evenmom = iseven(jₒ + jₛ + l)
+
+	if evenmom
+		@turbo for r_ind in eachindex(r)
+			TP₁₂⁰ = pre⁰ * Pʲₒʲₛₗₘ_₀₀_n₁n₂ * twoimagconjhωHγℓjₒjₛ_r₁r₂[r_ind, zeroindT]
+			TP₂₁⁰ = pre⁰ * Pʲₒʲₛₗₘ_₀₀_n₂n₁ * twoimagconjhωconjHγℓjₒjₛ_r₂r₁[r_ind, zeroindT]
+
+			K[rindK, r_ind, lm_ind_K] += real(TP₂₁⁰) - real(TP₁₂⁰)
+		end
 	end
 
 	# l = 0 only has an r component
-	((l == 0) || (jₛ == 0)) && return
+	anyzeromom && return K
+	@turbo for r_ind in eachindex(r)
+		TP₁₂¹ = pre⁺ * Pʲₒʲₛₗₘ_₀₀_n₁n₂ * twoimagconjhωHγℓjₒjₛ_r₁r₂[r_ind, plusindT]
+		TP₂₁¹ = pre⁺ * Pʲₒʲₛₗₘ_₀₀_n₂n₁ * twoimagconjhωconjHγℓjₒjₛ_r₂r₁[r_ind, plusindT]
 
-	tempterm!(temp, plusindT,
-		twoimagconjhωconjHγℓjₒjₛ_r₂r₁, pre⁺Pʲₒʲₛₗₘ_₀₀_n₂n₁,
-		twoimagconjhωHγℓjₒjₛ_r₁r₂, pre⁺Pʲₒʲₛₗₘ_₀₀_n₁n₂)
+		tempre = real(TP₂₁¹) - real(TP₁₂¹)
+		tempim = imag(TP₂₁¹) - imag(TP₁₂¹)
 
-	if iseven(jₒ + jₛ + l)
-		addtemptoK!(K, θindK, lm_ind_K, temp.re, 2)
+		K[θindK, r_ind, lm_ind_K] += evenmom * 2tempre
+		K[ϕindK, r_ind, lm_ind_K] += !evenmom * (-2tempim)
 	end
 
-	if isodd(jₒ + jₛ + l)
-		addtemptoK!(K, ϕindK, lm_ind_K, temp.im, -2)
-	end
-
-	return nothing
+	return K
 end
-
 function populatekernelrθϕl0!(::Flow, ::los_earth, K::AbstractArray{<:Real, 3},
 	SHModes, Yjₒjₛ_lm_n₁n₂, Yjₒjₛ_lm_n₂n₁,
 	(l,_), (jₛ, jₒ, ω), twoimagconjhωconjHγℓjₒjₛ_r₂r₁, twoimagconjhωHγℓjₒjₛ_r₁r₂,
-	pre⁰, pre⁺, phase, temp::StructArray{<:Complex})
+	pre⁰, pre⁺, phase)
 
 	lm_ind_K = modeindex(SHModes, (l, 0))
 	lm_ind = modeindex(firstshmodes(Yjₒjₛ_lm_n₁n₂), (l, 0))
 
-	_Yjₒjₛ_lm_n₁n₂ = Yjₒjₛ_lm_n₁n₂[lm_ind]
-	_Yjₒjₛ_lm_n₂n₁ = Yjₒjₛ_lm_n₂n₁[lm_ind]
+	_Yjₒjₛ_lm_n₁n₂ = parent(Yjₒjₛ_lm_n₁n₂[lm_ind])
+	_Yjₒjₛ_lm_n₂n₁ = parent(Yjₒjₛ_lm_n₂n₁[lm_ind])
 
-	# temp holds the tangential (+) component
-	fill!(temp, zero(eltype(temp)))
-
-	rindK, θindK, ϕindK = axes(K, 2)
+	rindK, θindK, ϕindK = axes(K, 1)
 	zeroindT, plusindT = axes(twoimagconjhωconjHγℓjₒjₛ_r₂r₁, 2)
 
-	for α₂ = 0:1, α₁ = 0:1
-		Pʲₒʲₛₗₘ_α₁α₂_n₁n₂ = _Yjₒjₛ_lm_n₁n₂[α₁, α₂]
-		Pʲₒʲₛₗₘ_α₁α₂_n₂n₁ = _Yjₒjₛ_lm_n₂n₁[α₁, α₂]
+	anyzeromom = l == 0 || jₛ == 0
+	evenmom = iseven(jₒ + jₛ + l)
 
-		iszero(Pʲₒʲₛₗₘ_α₁α₂_n₁n₂) && iszero(Pʲₒʲₛₗₘ_α₁α₂_n₂n₁) && continue
+	if evenmom
+		@turbo for r_ind in eachindex(r)
+			TP₁₂⁰ = pre⁰ * sum(_Yjₒjₛ_lm_n₁n₂ .* twoimagconjhωHγℓjₒjₛ_r₁r₂[r_ind, zeroindT])
+			TP₂₁⁰ = pre⁰ * sum(_Yjₒjₛ_lm_n₂n₁ .* twoimagconjhωconjHγℓjₒjₛ_r₂r₁[r_ind, zeroindT])
 
-		pre⁰Pʲₒʲₛₗₘ_α₁α₂_n₁n₂ = real(pre⁰ * Pʲₒʲₛₗₘ_α₁α₂_n₁n₂)
-		pre⁺Pʲₒʲₛₗₘ_α₁α₂_n₁n₂ = pre⁺ * Pʲₒʲₛₗₘ_α₁α₂_n₁n₂
-
-		pre⁰Pʲₒʲₛₗₘ_α₁α₂_n₂n₁ = real(pre⁰ * Pʲₒʲₛₗₘ_α₁α₂_n₂n₁)
-		pre⁺Pʲₒʲₛₗₘ_α₁α₂_n₂n₁ = pre⁺ * Pʲₒʲₛₗₘ_α₁α₂_n₂n₁
-
-		if iseven(jₒ + jₛ + l)
-			Kterm!(K, rindK, lm_ind_K, zeroindT,
-			twoimagconjhωconjHγℓjₒjₛ_r₂r₁, pre⁰Pʲₒʲₛₗₘ_α₁α₂_n₂n₁,
-			twoimagconjhωHγℓjₒjₛ_r₁r₂, pre⁰Pʲₒʲₛₗₘ_α₁α₂_n₁n₂,  α₁, α₂)
+			K[rindK, r_ind, lm_ind_K] += real(TP₂₁⁰) - real(TP₁₂⁰)
 		end
+	end
+	anyzeromom && return K
+	@turbo for r_ind in eachindex(r)
+		TP₁₂¹ = pre⁺ * sum(_Yjₒjₛ_lm_n₁n₂ .* twoimagconjhωHγℓjₒjₛ_r₁r₂[r_ind, plusindT])
+		TP₂₁¹ = pre⁺ * sum(_Yjₒjₛ_lm_n₂n₁ .* twoimagconjhωconjHγℓjₒjₛ_r₂r₁[r_ind, plusindT])
 
-		((l == 0) || (jₛ == 0)) && continue
+		tempre = real(TP₂₁¹) - real(TP₁₂¹)
+		tempim = imag(TP₂₁¹) - imag(TP₁₂¹)
 
-		tempterm!(temp, plusindT,
-		twoimagconjhωconjHγℓjₒjₛ_r₂r₁, pre⁺Pʲₒʲₛₗₘ_α₁α₂_n₂n₁,
-		twoimagconjhωHγℓjₒjₛ_r₁r₂, pre⁺Pʲₒʲₛₗₘ_α₁α₂_n₁n₂, α₁, α₂)
+		K[θindK, r_ind, lm_ind_K] += evenmom * 2tempre
+		K[ϕindK, r_ind, lm_ind_K] += !evenmom * (-2tempim)
 	end
 
-	if iseven(jₒ + jₛ + l)
-		addtemptoK!(K, θindK, lm_ind_K, temp.re, 2)
-	end
-
-	if isodd(jₒ + jₛ + l)
-		addtemptoK!(K, ϕindK, lm_ind_K, temp.im, -2)
-	end
-
-	return nothing
+	return K
 end
 
-_maybepermutedims(A::AbstractArray{<:Any, 4}) = Base.PermutedDimsArray(A, (3,4,1,2))
-_maybepermutedims(A::AbstractArray{<:Any, 2}) = A
+reinterpretSMatrix(A::AbstractArray{<:Any, 4}) = dropdims(reinterpret(SMatrix{2,2,eltype(A),4}, reshape(A, 4, size(A)[3:4]...)), dims = 1)
+reinterpretSMatrix(A::AbstractArray{<:Any, 2}) = A
 
 function kernel_uₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit,
 	xobs1::Point3D, xobs2::Point3D, los::los_direction, SHModes, hω_arr,
@@ -644,23 +511,24 @@ function kernel_uₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit
 	Gfn_fits_files_obs2 = Gfn_fits_files(Gfn_path_obs2,
 						(ℓ_arr, 1:Nν_Gfn), ℓ_ωind_iter_on_proc, s_max, NGfn_files_obs2)
 
-	# K = zeros(ComplexF64, nr, -1:1, length(SHModes))
-	Kre = zeros(-1:1, nr, length(SHModes))
+	Kre = zeros(3, nr, length(SHModes)) # first axis is for vector indices (-1,0,1 in the helicity basis)
 	K = StructArray{ComplexF64}((Kre, zero(Kre))) # Kγₗₘ(r, x₁, x₂)
 
-	ind⁰ = UnitRange(axes(Kre, 2))[2]
+	ind⁰ = 2 # index of the vector component 0
 
 	arrs = allocatearrays(Flow(), los, obs_at_same_height);
 	@unpack Gsrc, drGsrc, Gparts_r₁, Gparts_r₂,
-	Gγℓjₒjₛ_r₁, Gγℓjₒjₛ_r₂, Hγℓjₒjₛ_r₁r₂, Hγℓjₒjₛ_r₂r₁, temp = arrs;
+	Gγℓjₒjₛ_r₁, Gγℓjₒjₛ_r₂, Hγℓjₒjₛ_r₁r₂, Hγℓjₒjₛ_r₂r₁ = arrs;
+	@unpack Gparts_r₁_2, Gparts_r₂_2 = arrs;
 	@unpack twoimagconjhωconjHγℓjₒjₛ_r₂r₁, twoimagconjhωHγℓjₒjₛ_r₁r₂ = arrs;
 	twoimagconjhωconjHγℓjₒjₛ_r₂r₁P, twoimagconjhωHγℓjₒjₛ_r₁r₂P = map(parent, (twoimagconjhωconjHγℓjₒjₛ_r₂r₁, twoimagconjhωHγℓjₒjₛ_r₁r₂))
 
-	reinterpretSMatrix(A::AbstractArray{<:Any, 4}) = dropdims(reinterpret(SMatrix{2,2,eltype(A),4}, reshape(A, 4, size(A)[3:4]...)), dims = 1)
-	reinterpretSMatrix(A::AbstractArray{<:Any, 2}) = A
+	HT = HybridArray{Tuple{sizeindG(los)...,sizeindG(los)...,StaticArrays.Dynamic(),2}}
+	H₂₁ = _structarrayparent(Hγℓjₒjₛ_r₂r₁, HT)
+	H₁₂ = _structarrayparent(Hγℓjₒjₛ_r₁r₂, HT)
 
-	twoimagconjhωconjHγℓjₒjₛ_r₂r₁S = reinterpretSMatrix(parent(twoimagconjhωconjHγℓjₒjₛ_r₂r₁))
-	twoimagconjhωHγℓjₒjₛ_r₁r₂S = reinterpretSMatrix(parent(twoimagconjhωHγℓjₒjₛ_r₁r₂))
+	twoimagconjhωconjHγℓjₒjₛ_r₂r₁S = reinterpretSMatrix(twoimagconjhωconjHγℓjₒjₛ_r₂r₁P)
+	twoimagconjhωHγℓjₒjₛ_r₁r₂S = reinterpretSMatrix(twoimagconjhωHγℓjₒjₛ_r₁r₂P)
 
 	jₒjₛ_allmodes = L2L1Triangle(ℓ_range_proc, s_max, ℓ_arr)
 	jₒrange = l2_range(jₒjₛ_allmodes)
@@ -672,11 +540,12 @@ function kernel_uₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit
 		end
 	end
 
-	Y12, Y21 = los_projected_spheroidal_biposh_flippoints(xobs1, xobs2, los, SHModes, jₒjₛ_allmodes, localtimer)
+	@timeit localtimer "biposh" begin
+		Y12, Y21 = los_projected_spheroidal_biposh_flippoints(xobs1, xobs2, los, SHModes, jₒjₛ_allmodes)
+	end
 
 	C = zeros(0:1, 0:s_max, l2_range(jₒjₛ_allmodes), ℓ_range_proc)
 
-	@timeit localtimer "CG" begin
 	for jₛ in axes(C, 4), jₒ in axes(C, 3), ℓ in axes(C, 2)
 
 		C[0, ℓ, jₒ, jₛ] = if iseven(jₒ+jₛ+ℓ)
@@ -691,19 +560,12 @@ function kernel_uₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit
 							zero(Float64)
 						end
 	end
-	end # timer
 
-	C⁰, C⁺ = zero(Float64), zero(Float64)
-	phase = 1
-	pre⁰, pre⁺ = zero(Float64), zero(Float64)
+	C⁰::Float64, C⁺::Float64 = 0, 0
+	phase::Int = 1
+	pre⁰::Float64, pre⁺::Float64 = 0, 0
 
 	ω_ind_prev = first(ℓ_ωind_iter_on_proc)[2] - 1
-
-	HT = HybridArray{Tuple{2,2,StaticArrays.Dynamic(),2}}
-	H₂₁R = HT(parent(Hγℓjₒjₛ_r₂r₁.re))
-	H₂₁I = HT(parent(Hγℓjₒjₛ_r₂r₁.im))
-	H₁₂R = HT(parent(Hγℓjₒjₛ_r₁r₂.re))
-	H₁₂I = HT(parent(Hγℓjₒjₛ_r₁r₂.im))
 
 	# Loop over the Greenfn files
 	for (jₛ, ω_ind) in ℓ_ωind_iter_on_proc
@@ -748,11 +610,10 @@ function kernel_uₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit
 			end # timer
 
 			@timeit localtimer "radial term 1" begin
-			Gⱼₒⱼₛω_u⁰⁺_firstborn!(Gparts_r₁, Gsrc, drGsrc, jₛ, Gobs1, jₒ, los)
+			Gⱼₒⱼₛω_u⁰⁺_firstborn!(Gparts_r₁, Gparts_r₁_2, Gsrc, drGsrc, jₛ, Gobs1, jₒ, los)
 			end # timer
 
 			if !obs_at_same_height
-
 				Gobs2 = Gobs2_cache[jₒ]
 				@timeit localtimer "FITS" begin
 				if ω_ind != ω_ind_prev || jₒ ∉ l2_range(jₒjₛ_allmodes, jₛ-1)
@@ -762,7 +623,7 @@ function kernel_uₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit
 				end # timer
 
 				@timeit localtimer "radial term 1" begin
-				Gⱼₒⱼₛω_u⁰⁺_firstborn!(Gparts_r₂, Gsrc, drGsrc, jₛ, Gobs2, jₒ, los)
+				Gⱼₒⱼₛω_u⁰⁺_firstborn!(Gparts_r₂, Gparts_r₂_2, Gsrc, drGsrc, jₛ, Gobs2, jₒ, los)
 				end #timer
 			end
 
@@ -777,23 +638,19 @@ function kernel_uₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit
 				if l != l_prev
 					@timeit localtimer "radial term 2" begin
 						@timeit localtimer "H" begin
-							Hγₗⱼₒⱼₛω_α₁α₂_firstborn!(Hγℓjₒjₛ_r₁r₂, Gparts_r₁, Gγℓjₒjₛ_r₁, Gα₂r_r₂_rₛ, jₒ, jₛ, l)
+							Hγₗⱼₒⱼₛω_α₁α₂_firstborn!(Hγℓjₒjₛ_r₁r₂, Gparts_r₁_2, Gγℓjₒjₛ_r₁, Gα₂r_r₂_rₛ, jₒ, jₛ, l)
 
 							if !obs_at_same_height
-								Hγₗⱼₒⱼₛω_α₁α₂_firstborn!(Hγℓjₒjₛ_r₂r₁, Gparts_r₂, Gγℓjₒjₛ_r₂, Gα₂r_r₁_rₛ, jₒ, jₛ, l)
+								Hγₗⱼₒⱼₛω_α₁α₂_firstborn!(Hγℓjₒjₛ_r₂r₁, Gparts_r₂_2, Gγℓjₒjₛ_r₂, Gα₂r_r₁_rₛ, jₒ, jₛ, l)
 							end
 						end
 
 						@timeit localtimer "T" begin
-							@turbo for I in CartesianIndices(H₂₁R)
-								twoimagconjhωconjHγℓjₒjₛ_r₂r₁P[I] = -2(real(h_ω) * H₂₁I[I] + imag(h_ω) * H₂₁R[I])
-								twoimagconjhωHγℓjₒjₛ_r₁r₂P[I] = 2(real(h_ω) * H₁₂I[I] - imag(h_ω) * H₁₂R[I])
+							@turbo for I in CartesianIndices(H₂₁)
+								twoimagconjhωconjHγℓjₒjₛ_r₂r₁P[I] = -2imag(h_ω * H₂₁[I])
+								twoimagconjhωHγℓjₒjₛ_r₁r₂P[I] = 2imag(conj(h_ω) * H₁₂[I])
 							end
-							# @turbo @. twoimagconjhωconjHγℓjₒjₛ_r₂r₁  = -2(real(h_ω) * Hγℓjₒjₛ_r₂r₁.im + imag(h_ω) * Hγℓjₒjₛ_r₂r₁.re)
-							# @turbo @. twoimagconjhωHγℓjₒjₛ_r₁r₂ = 2(real(h_ω) * Hγℓjₒjₛ_r₁r₂.im - imag(h_ω) * Hγℓjₒjₛ_r₁r₂.re)
 						end
-						# @. twoimagconjhωconjHγℓjₒjₛ_r₂r₁ = -2imag(h_ω * Hγℓjₒjₛ_r₂r₁)
-						# @. twoimagconjhωHγℓjₒjₛ_r₁r₂ = 2imag(conjhω * Hγℓjₒjₛ_r₁r₂)
 
 						C⁰ = C[0, l, jₒ, jₛ]
 						C⁺ = C[1, l, jₒ, jₛ]
@@ -807,13 +664,13 @@ function kernel_uₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit
 				end
 
 				@timeit localtimer "kernel" begin
-				populatekernel2!(Flow(), los, K,
+				populatekernel!(Flow(), los, K,
 					SHModes,
 					Yjₒjₛ_lm_n₁n₂, Yjₒjₛ_lm_n₂n₁,
 					(l, m), (jₛ, jₒ, ω),
 					twoimagconjhωHγℓjₒjₛ_r₁r₂S,
 					twoimagconjhωconjHγℓjₒjₛ_r₂r₁S,
-					pre⁰, pre⁺, phase, temp)
+					pre⁰, pre⁺, phase)
 				end #timer
 			end
 		end
@@ -822,12 +679,14 @@ function kernel_uₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit
 	end
 
 	map(closeGfnfits, (Gfn_fits_files_src, Gfn_fits_files_obs1, Gfn_fits_files_obs2))
-	K = StructArray{ComplexF64}(map(x -> permutedims(x, [2,1,3]), (K.re, K.im)))
-	mulprefactor!(K, ind⁰)
+
+	_K = permutedims(K, [2,1,3])
+	mulprefactor!(_K, ind⁰)
+	AK = Array(no_offset_view(_K))
 
 	println(localtimer)
 
-	return Array(no_offset_view(K))
+	return AK
 end
 
 # Compute Kₛₜ first and then compute Kₛ₀_rθϕ from that
@@ -897,17 +756,29 @@ function kernel_uₛ₀_rθϕ_partial_2(localtimer, ℓ_ωind_iter_on_proc::Prod
 	Gfn_fits_files_obs2 = Gfn_fits_files(Gfn_path_obs2,
 						(ℓ_arr, 1:Nν_Gfn), ℓ_ωind_iter_on_proc, s_max, NGfn_files_obs2)
 
-	K = zeros(nr, 3, length(SHModes)) # Kγₗₘ(r, x₁, x₂)
+	K = zeros(3, nr, length(SHModes)) # Kγₗₘ(r, x₁, x₂)
 	indr = 1
 
 	arrs = allocatearrays(Flow(), los, obs_at_same_height)
-	@unpack Gsrc, drGsrc, Gobs1, Gobs2, Gparts_r₁, Gparts_r₂,
-	Gγℓjₒjₛ_r₁, Gγℓjₒjₛ_r₂, Hγℓjₒjₛ_r₁r₂, Hγℓjₒjₛ_r₂r₁, temp = arrs
+	@unpack Gsrc, drGsrc, Gobs1, Gobs2, Gparts_r₁, Gparts_r₂, Gparts_r₁_2, Gparts_r₂_2,
+	Gγℓjₒjₛ_r₁, Gγℓjₒjₛ_r₂, Hγℓjₒjₛ_r₁r₂, Hγℓjₒjₛ_r₂r₁ = arrs
 	@unpack twoimagconjhωconjHγℓjₒjₛ_r₂r₁, twoimagconjhωHγℓjₒjₛ_r₁r₂ = arrs
+	twoimagconjhωconjHγℓjₒjₛ_r₂r₁P, twoimagconjhωHγℓjₒjₛ_r₁r₂P = map(parent, (twoimagconjhωconjHγℓjₒjₛ_r₂r₁, twoimagconjhωHγℓjₒjₛ_r₁r₂))
+
+	HT = HybridArray{Tuple{sizeindG(los)...,sizeindG(los)...,StaticArrays.Dynamic(),2}}
+	H₂₁R = HT(parent(Hγℓjₒjₛ_r₂r₁.re))
+	H₂₁I = HT(parent(Hγℓjₒjₛ_r₂r₁.im))
+	H₁₂R = HT(parent(Hγℓjₒjₛ_r₁r₂.re))
+	H₁₂I = HT(parent(Hγℓjₒjₛ_r₁r₂.im))
+
+	twoimagconjhωconjHγℓjₒjₛ_r₂r₁S = reinterpretSMatrix(twoimagconjhωconjHγℓjₒjₛ_r₂r₁P)
+	twoimagconjhωHγℓjₒjₛ_r₁r₂S = reinterpretSMatrix(twoimagconjhωHγℓjₒjₛ_r₁r₂P)
 
 	jₒjₛ_allmodes = L2L1Triangle(ℓ_range_proc, s_max, ℓ_arr)
 
-	Y12, Y21 = los_projected_spheroidal_biposh_flippoints(xobs1, xobs2, los, SHModes, jₒjₛ_allmodes, localtimer)
+	@timeit localtimer "biposh" begin
+		Y12, Y21 = los_projected_spheroidal_biposh_flippoints(xobs1, xobs2, los, SHModes, jₒjₛ_allmodes)
+	end
 
 	C = zeros(0:1, 0:s_max, l2_range(jₒjₛ_allmodes), ℓ_range_proc)
 
@@ -935,8 +806,7 @@ function kernel_uₛ₀_rθϕ_partial_2(localtimer, ℓ_ωind_iter_on_proc::Prod
 	# Loop over the Greenfn files
 	for (jₛ, ω_ind) in ℓ_ωind_iter_on_proc
 		ω = ω_arr[ω_ind]
-		hω = hω_arr[ω_ind]
-		conjhω = conj(hω)
+		h_ω = hω_arr[ω_ind]
 		dωω³Pω = dω/2π * ω^3 * Powspec(ω)
 		Ωjₛ0 = Ω(jₛ, 0)
 
@@ -967,7 +837,7 @@ function kernel_uₛ₀_rθϕ_partial_2(localtimer, ℓ_ωind_iter_on_proc::Prod
 			end # timer
 
 			@timeit localtimer "radial term 1" begin
-			Gⱼₒⱼₛω_u⁰⁺_firstborn!(Gparts_r₁, Gsrc, drGsrc, jₛ, Gobs1, jₒ, los)
+			Gⱼₒⱼₛω_u⁰⁺_firstborn!(Gparts_r₁, Gparts_r₁_2, Gsrc, drGsrc, jₛ, Gobs1, jₒ, los)
 			end # timer
 
 			if !obs_at_same_height
@@ -977,7 +847,7 @@ function kernel_uₛ₀_rθϕ_partial_2(localtimer, ℓ_ωind_iter_on_proc::Prod
 				end # timer
 
 				@timeit localtimer "radial term 1" begin
-				Gⱼₒⱼₛω_u⁰⁺_firstborn!(Gparts_r₂, Gsrc, drGsrc, jₛ, Gobs2, jₒ, los)
+				Gⱼₒⱼₛω_u⁰⁺_firstborn!(Gparts_r₂, Gparts_r₂_2, Gsrc, drGsrc, jₛ, Gobs2, jₒ, los)
 				end #timer
 			end
 
@@ -988,15 +858,22 @@ function kernel_uₛ₀_rθϕ_partial_2(localtimer, ℓ_ωind_iter_on_proc::Prod
 				δ(jₛ, jₒ, l) || continue
 
 				@timeit localtimer "radial term 2" begin
-				Hγₗⱼₒⱼₛω_α₁α₂_firstborn!(Hγℓjₒjₛ_r₁r₂, Gparts_r₁, Gγℓjₒjₛ_r₁, Gα₂r_r₂_rₛ, jₒ, jₛ, l)
+					@timeit localtimer "H" begin
+						Hγₗⱼₒⱼₛω_α₁α₂_firstborn!(Hγℓjₒjₛ_r₁r₂, Gparts_r₁_2, Gγℓjₒjₛ_r₁, Gα₂r_r₂_rₛ, jₒ, jₛ, l)
 
-				if !obs_at_same_height
-					Hγₗⱼₒⱼₛω_α₁α₂_firstborn!(Hγℓjₒjₛ_r₂r₁, Gparts_r₂, Gγℓjₒjₛ_r₂, Gα₂r_r₁_rₛ, jₒ, jₛ, l)
-				end
+						if !obs_at_same_height
+							Hγₗⱼₒⱼₛω_α₁α₂_firstborn!(Hγℓjₒjₛ_r₂r₁, Gparts_r₂_2, Gγℓjₒjₛ_r₂, Gα₂r_r₁_rₛ, jₒ, jₛ, l)
+						end
+					end
+					# @. twoimagconjhωconjHγℓjₒjₛ_r₂r₁ = -2imag(hω * Hγℓjₒjₛ_r₂r₁)
+					# @. twoimagconjhωHγℓjₒjₛ_r₁r₂ = 2imag(conjhω * Hγℓjₒjₛ_r₁r₂)
+					@timeit localtimer "T" begin
+						@turbo for I in CartesianIndices(H₂₁R)
+							twoimagconjhωconjHγℓjₒjₛ_r₂r₁P[I] = -2(real(h_ω) * H₂₁I[I] + imag(h_ω) * H₂₁R[I])
+							twoimagconjhωHγℓjₒjₛ_r₁r₂P[I] = 2(real(h_ω) * H₁₂I[I] - imag(h_ω) * H₁₂R[I])
+						end
+					end
 				end #timer
-
-				@. twoimagconjhωconjHγℓjₒjₛ_r₂r₁ = -2imag(hω * Hγℓjₒjₛ_r₂r₁)
-				@. twoimagconjhωHγℓjₒjₛ_r₁r₂ = 2imag(conjhω * Hγℓjₒjₛ_r₁r₂)
 
 				C⁰ = C[0, l, jₒ, jₛ]
 				C⁺ = C[1, l, jₒ, jₛ]
@@ -1008,17 +885,18 @@ function kernel_uₛ₀_rθϕ_partial_2(localtimer, ℓ_ωind_iter_on_proc::Prod
 
 				@timeit localtimer "kernel" begin
 				populatekernelrθϕl0!(Flow(), los, K, SHModes, Yjₒjₛ_lm_n₁n₂, Yjₒjₛ_lm_n₂n₁,
-				(l, m), (jₛ, jₒ, ω), twoimagconjhωconjHγℓjₒjₛ_r₂r₁, twoimagconjhωHγℓjₒjₛ_r₁r₂,
-				pre⁰, pre⁺, phase, temp)
+				(l, m), (jₛ, jₒ, ω), twoimagconjhωconjHγℓjₒjₛ_r₂r₁S, twoimagconjhωHγℓjₒjₛ_r₁r₂S,
+				pre⁰, pre⁺, phase)
 				end #timer
 			end
 		end
 	end
 
 	map(closeGfnfits, (Gfn_fits_files_src, Gfn_fits_files_obs1, Gfn_fits_files_obs2))
-	mulprefactor!(K, indr)
+	_K = Base.PermutedDimsArray(K, (2,1,3))
+	mulprefactor!(_K, indr)
 
-	return K
+	return Array(_K)
 end
 
 function _K_uₛₜ(comm, m::SeismicMeasurement, xobs1, xobs2, los::los_direction, args...; kwargs...)
@@ -1301,10 +1179,10 @@ function kernel_δc₀₀_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSpl
 
 	K = zeros(nr)
 
-	arr = allocatearrays(SoundSpeed(), los, r₁_ind == r₂_ind)
-	@unpack Gsrc, drGsrc, divGsrc, Gobs1, drGobs1, Gobs2, divGobs = arr
-	fjj_r₁_rsrc, fjj_r₂_rsrc = arr.fjₒjₛ_r₁_rsrc, arr.fjₒjₛ_r₂_rsrc
-	H¹₁jj_r₁r₂, H¹₁jj_r₂r₁ = arr.Hjₒjₛω_r₁r₂, arr.Hjₒjₛω_r₂r₁
+	arrs = allocatearrays(SoundSpeed(), los, r₁_ind == r₂_ind);
+	@unpack Gsrc, drGsrc, divGsrc, Gobs1, drGobs1, Gobs2, divGobs = arrs;
+	fjj_r₁_rsrc, fjj_r₂_rsrc = arrs.fjₒjₛ_r₁_rsrc, arrs.fjₒjₛ_r₂_rsrc;
+	H¹₁jj_r₁r₂, H¹₁jj_r₂r₁ = arrs.Hjₒjₛω_r₁r₂, arrs.Hjₒjₛω_r₂r₁;
 
 	Y12 = los_projected_biposh_spheroidal(computeY₀₀, xobs1, xobs2, los, ℓ_ωind_iter_on_proc)
 
@@ -1462,76 +1340,40 @@ end
 # Sound-speed kernels
 ########################################################################################
 
-@inline function Kterm_c!(K::StructArray{<:Complex}, lm_ind_K,
-	tworealconjhωHjₒjₛω_r₁r₂, llY_n₁n₂::Complex,
-	tworealconjhωconjHjₒjₛω_r₂r₁, llY_n₂n₁::Complex, args...)
-
-	Kterm_c!(K.re, lm_ind_K, tworealconjhωHjₒjₛω_r₁r₂, real(llY_n₁n₂),
-		tworealconjhωconjHjₒjₛω_r₂r₁, real(llY_n₂n₁), args...)
-	Kterm_c!(K.im, lm_ind_K, tworealconjhωHjₒjₛω_r₁r₂, imag(llY_n₁n₂),
-		tworealconjhωconjHjₒjₛω_r₂r₁, imag(llY_n₂n₁), args...)
-	return nothing
-end
-
-@inline function Kterm_c!(K::AbstractArray{<:Real}, lm_ind_K,
-	tworealconjhωHjₒjₛω_r₁r₂::AbstractArray{<:Real}, llY_n₁n₂::Real,
-	tworealconjhωconjHjₒjₛω_r₂r₁::AbstractArray{<:Real}, llY_n₂n₁::Real)
-
-	@turbo for r_ind in UnitRange(axes(K, 1))
-		K[r_ind, lm_ind_K] += (
-			tworealconjhωHjₒjₛω_r₁r₂[r_ind] * llY_n₁n₂ +
-			tworealconjhωconjHjₒjₛω_r₂r₁[r_ind] * llY_n₂n₁
-		)
-	end
-	return nothing
-end
-@inline function Kterm_c!(K::AbstractArray{<:Real}, lm_ind_K,
-	tworealconjhωHjₒjₛω_r₁r₂::AbstractArray{<:Real}, llY_n₁n₂::Real,
-	tworealconjhωconjHjₒjₛω_r₂r₁::AbstractArray{<:Real}, llY_n₂n₁::Real, α₁, α₂)
-
-	@turbo for r_ind in UnitRange(axes(K, 1))
-		K[r_ind, lm_ind_K] += (
-			tworealconjhωHjₒjₛω_r₁r₂[r_ind, α₁, α₂] * llY_n₁n₂ +
-			tworealconjhωconjHjₒjₛω_r₂r₁[r_ind, α₁, α₂] * llY_n₂n₁
-		)
-	end
-	return nothing
-end
-
-function populatekernel!(::SoundSpeed, ::los_radial, K::AbstractArray{<:Complex}, SHModes, Yjₒjₛ_n1n2, Yjₒjₛ_n2n1,
+function populatekernel!(::SoundSpeed, ::los_radial, K::StructArray{<:Complex}, SHModes, Yjₒjₛ_n1n2, Yjₒjₛ_n2n1,
 	(l, m), (jₛ, jₒ, ω), pre, tworealconjhωHjₒjₛω_r₁r₂, tworealconjhωconjHjₒjₛω_r₂r₁)
 
 	lm_ind = modeindex(firstshmodes(Yjₒjₛ_n1n2), (l, m))
 	lm_ind_K = modeindex(SHModes, (l, m))
 
-	llY_n₁n₂ = pre * conj(Yjₒjₛ_n1n2[lm_ind])
-	llY_n₂n₁ = pre * conj(Yjₒjₛ_n2n1[lm_ind])
+	@turbo for r_ind in eachindex(r)
+		T₁₂ = pre * conj(Yjₒjₛ_n1n2[lm_ind]) * tworealconjhωHjₒjₛω_r₁r₂[r_ind]
+		T₂₁ = pre * conj(Yjₒjₛ_n2n1[lm_ind]) * tworealconjhωconjHjₒjₛω_r₂r₁[r_ind]
 
-	iszero(llY_n₁n₂) && iszero(llY_n₂n₁) && return
+		K.re[r_ind, lm_ind_K] += real(T₂₁) + real(T₁₂)
+		K.im[r_ind, lm_ind_K] += imag(T₂₁) + imag(T₁₂)
+	end
 
-	Kterm_c!(K, lm_ind_K, tworealconjhωHjₒjₛω_r₁r₂, llY_n₁n₂,
-		tworealconjhωconjHjₒjₛω_r₂r₁, llY_n₂n₁)
-	return nothing
+	return K
 end
 
-function populatekernel!(::SoundSpeed, ::los_earth, K::AbstractArray{<:Complex}, SHModes, Yjₒjₛ_lm_n₁n₂, Yjₒjₛ_lm_n₂n₁,
+function populatekernel!(::SoundSpeed, ::los_earth, K::StructArray{<:Complex}, SHModes, Yjₒjₛ_lm_n₁n₂, Yjₒjₛ_lm_n₂n₁,
 	(l, m), (jₛ, jₒ, ω), pre, tworealconjhωHjₒjₛω_r₁r₂, tworealconjhωconjHjₒjₛω_r₂r₁)
 
 	lm_ind = modeindex(firstshmodes(Yjₒjₛ_lm_n₁n₂), (l, m))
 	lm_ind_K = modeindex(SHModes, (l, m))
 
-	_Yjₒjₛ_lm_n₁n₂ = Yjₒjₛ_lm_n₁n₂[lm_ind]
-	_Yjₒjₛ_lm_n₂n₁ = Yjₒjₛ_lm_n₂n₁[lm_ind]
+	_Yjₒjₛ_lm_n₁n₂ = parent(Yjₒjₛ_lm_n₁n₂[lm_ind])
+	_Yjₒjₛ_lm_n₂n₁ = parent(Yjₒjₛ_lm_n₂n₁[lm_ind])
 
-	for α₂ = 0:1, α₁ = 0:1
-		llY_n₁n₂ = pre * conj(_Yjₒjₛ_lm_n₁n₂[α₁, α₂])
-		llY_n₂n₁ = pre * conj(_Yjₒjₛ_lm_n₂n₁[α₁, α₂])
+	@turbo for r_ind in eachindex(r)
+		T₁₂ = pre * sum(conj(_Yjₒjₛ_lm_n₁n₂) .* tworealconjhωHjₒjₛω_r₁r₂[r_ind])
+		T₂₁ = pre * sum(conj(_Yjₒjₛ_lm_n₂n₁) .* tworealconjhωconjHjₒjₛω_r₂r₁[r_ind])
 
-		iszero(llY_n₁n₂) && iszero(llY_n₂n₁) && continue
-
-		Kterm_c!(K, lm_ind_K, tworealconjhωHjₒjₛω_r₁r₂, llY_n₁n₂,
-		tworealconjhωconjHjₒjₛω_r₂r₁, llY_n₂n₁, α₁, α₂)
+		K.re[r_ind, lm_ind_K] += real(T₂₁) + real(T₁₂)
+		K.im[r_ind, lm_ind_K] += imag(T₂₁) + imag(T₁₂)
 	end
+	return K
 end
 
 function kernel_δcₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit,
@@ -1563,10 +1405,17 @@ function kernel_δcₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSpl
 						(ℓ_arr, 1:Nν_Gfn), ℓ_ωind_iter_on_proc, s_max, NGfn_files_obs2)
 
 	arrs = allocatearrays(SoundSpeed(), los, obs_at_same_height)
-	@unpack Gsrc, drGsrc, Gobs1, drGobs1, Gobs2, drGobs2, divGsrc, divGobs = arrs
-	@unpack fjₒjₛ_r₁_rsrc, fjₒjₛ_r₂_rsrc, Hjₒjₛω_r₁r₂, Hjₒjₛω_r₂r₁ = arrs
-	@unpack Gobs1_cache, drGobs1_cache, Gobs2_cache, drGobs2_cache = arrs
-	@unpack tworealconjhωHjₒjₛω_r₁r₂, tworealconjhωconjHjₒjₛω_r₂r₁ = arrs
+	@unpack Gsrc, drGsrc, Gobs1, drGobs1, Gobs2, drGobs2, divGsrc, divGobs = arrs;
+	@unpack fjₒjₛ_r₁_rsrc, fjₒjₛ_r₂_rsrc, Hjₒjₛω_r₁r₂, Hjₒjₛω_r₂r₁ = arrs;
+	@unpack Gobs1_cache, drGobs1_cache, Gobs2_cache, drGobs2_cache = arrs;
+	@unpack tworealconjhωHjₒjₛω_r₁r₂, tworealconjhωconjHjₒjₛω_r₂r₁ = arrs;
+	tworealconjhωconjHjₒjₛω_r₂r₁P, tworealconjhωHjₒjₛω_r₁r₂P = map(parent, (tworealconjhωconjHjₒjₛω_r₂r₁, tworealconjhωHjₒjₛω_r₁r₂));
+
+	reinterpretSMatrix(A::AbstractArray{<:Any, 3}) = dropdims(reinterpret(SMatrix{2,2,eltype(A),4}, reshape(A, 4, size(A, 3))), dims = 1)
+	reinterpretSMatrix(A::AbstractVector) = A
+
+	tworealconjhωconjHjₒjₛω_r₂r₁S = reinterpretSMatrix(tworealconjhωconjHjₒjₛω_r₂r₁P)
+	tworealconjhωHjₒjₛω_r₁r₂S = reinterpretSMatrix(tworealconjhωHjₒjₛω_r₁r₂P)
 
 	ℓ_range_proc = UnitRange(extremaelement(ℓ_ωind_iter_on_proc, dims = 1)...)
 
@@ -1595,11 +1444,12 @@ function kernel_δcₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSpl
 		end
 	end
 
-	# K = zeros(ComplexF64, nr, length(SHModes))
 	K = zeros(nr, length(SHModes))
 	K = StructArray{ComplexF64}((K, zero(K)))
 
-	Y12, Y21 = los_projected_spheroidal_biposh_flippoints(xobs1, xobs2, los, SHModes, jₒjₛ_allmodes, localtimer)
+	@timeit localtimer "biposh" begin
+		Y12, Y21 = los_projected_spheroidal_biposh_flippoints(xobs1, xobs2, los, SHModes, jₒjₛ_allmodes)
+	end
 
 	ω_ind_prev = -1
 	# Loop over the Greenfn files
@@ -1663,7 +1513,7 @@ function kernel_δcₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSpl
 				Hjₒjₛω!(Hjₒjₛω_r₁r₂, fjₒjₛ_r₁_rsrc, Gαr_r₂_rsrc)
 			end
 			@timeit localtimer "radial term 3" begin
-				@. tworealconjhωHjₒjₛω_r₁r₂ = 2real(conjhω * Hjₒjₛω_r₁r₂)
+				@turbo @. tworealconjhωHjₒjₛω_r₁r₂ = 2(real(conjhω) * Hjₒjₛω_r₁r₂.re - imag(conjhω) * Hjₒjₛω_r₁r₂.im)
 			end
 
 			if !obs_at_same_height
@@ -1688,7 +1538,7 @@ function kernel_δcₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSpl
 				end
 			end
 			@timeit localtimer "radial term 3" begin
-			@. tworealconjhωconjHjₒjₛω_r₂r₁ = 2real(conjhω * conj(Hjₒjₛω_r₂r₁))
+			@turbo @. tworealconjhωconjHjₒjₛω_r₂r₁ = 2(real(conjhω) * Hjₒjₛω_r₂r₁.re + imag(conjhω) * Hjₒjₛω_r₂r₁.im)
 			end
 
 			for (l, m) in firstshmodes(Yjₒjₛ_lm_n₁n₂)
@@ -1709,8 +1559,8 @@ function kernel_δcₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSpl
 				populatekernel!(SoundSpeed(), los, K, SHModes,
 					Yjₒjₛ_lm_n₁n₂, Yjₒjₛ_lm_n₂n₁,
 					(l, m), (jₛ, jₒ, ω), pre,
-					tworealconjhωHjₒjₛω_r₁r₂,
-					tworealconjhωconjHjₒjₛω_r₂r₁)
+					tworealconjhωHjₒjₛω_r₁r₂S,
+					tworealconjhωconjHjₒjₛω_r₂r₁S)
 				end
 			end # lm
 		end # jₒ

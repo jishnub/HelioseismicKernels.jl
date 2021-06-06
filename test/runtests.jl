@@ -9,171 +9,173 @@ xsrc2 = HelioseismicKernels.Point3D(r_src, n2);
 xobs1 = HelioseismicKernels.Point3D(r_obs, n1);
 xobs2 = HelioseismicKernels.Point3D(r_obs, n2);
 
-@testset "kernel components" begin
-	@testset "SoundSpeed" begin
-	    function uniformvalidation(::HelioseismicKernels.SoundSpeed, m::HelioseismicKernels.SeismicMeasurement, xobs1, xobs2,
-	    	los::HelioseismicKernels.los_direction = HelioseismicKernels.los_radial(); SHModes = LM(0:0, 0:0))
+@testset "all tests" begin
+	@testset "kernel components" begin
+		@testset "SoundSpeed" begin
+			function uniformvalidation(::HelioseismicKernels.SoundSpeed, m::HelioseismicKernels.SeismicMeasurement, xobs1, xobs2,
+				los::HelioseismicKernels.los_direction = HelioseismicKernels.los_radial(); SHModes = LM(0:0, 0:0))
 
-			ℓ_range = 1:1
+				ℓ_range = 1:1
 
+				hω = HelioseismicKernels.hω(nothing, m, xobs1, xobs2, los; ℓ_range = ℓ_range)
+
+				Kδcₛₜ = HelioseismicKernels.kernel_δcₛₜ(nothing, m, xobs1, xobs2, los; ℓ_range = ℓ_range, SHModes = SHModes, hω=hω, save = false);
+
+				Kδc₀₀ = HelioseismicKernels.kernel_δc₀₀(nothing, m, xobs1, xobs2, los; ℓ_range = ℓ_range, hω=hω, save = false);
+
+				@test Kδcₛₜ[:,(0,0)]≈Kδc₀₀
+			end
+
+			@testset "TravelTimes" begin
+				@testset "radial" begin
+					uniformvalidation(HelioseismicKernels.SoundSpeed(), HelioseismicKernels.TravelTimes(), xobs1, xobs2, HelioseismicKernels.los_radial())
+					uniformvalidation(HelioseismicKernels.SoundSpeed(), HelioseismicKernels.TravelTimes(), xobs1, xobs2, HelioseismicKernels.los_radial(),
+						SHModes = LM(0:2, 0:2))
+				end
+				@testset "line-of-sight" begin
+					uniformvalidation(HelioseismicKernels.SoundSpeed(), HelioseismicKernels.TravelTimes(), xobs1, xobs2, HelioseismicKernels.los_earth())
+					uniformvalidation(HelioseismicKernels.SoundSpeed(), HelioseismicKernels.TravelTimes(), xobs1, xobs2, HelioseismicKernels.los_earth(),
+						SHModes = LM(0:2, 0:2))
+				end
+			end
+			@testset "Amplitudes" begin
+				@testset "radial" begin
+					uniformvalidation(HelioseismicKernels.SoundSpeed(), HelioseismicKernels.Amplitudes(), xobs1, xobs2, HelioseismicKernels.los_radial())
+					uniformvalidation(HelioseismicKernels.SoundSpeed(), HelioseismicKernels.Amplitudes(), xobs1, xobs2, HelioseismicKernels.los_radial(),
+						SHModes = LM(0:2, 0:2))
+				end
+				@testset "line-of-sight" begin
+					uniformvalidation(HelioseismicKernels.SoundSpeed(), HelioseismicKernels.Amplitudes(), xobs1, xobs2, HelioseismicKernels.los_earth())
+					uniformvalidation(HelioseismicKernels.SoundSpeed(), HelioseismicKernels.Amplitudes(), xobs1, xobs2, HelioseismicKernels.los_earth(),
+						SHModes = LM(0:2, 0:2))
+				end
+			end
+		end
+
+		@testset "flows" begin
+			function uniformvalidation(::HelioseismicKernels.Flow, m::HelioseismicKernels.SeismicMeasurement, xobs1, xobs2,
+				los::HelioseismicKernels.los_direction = HelioseismicKernels.los_radial();
+				SHModes = LM(1:1, 0:0))
+
+				ℓ_range = 1:1
+
+				hω = HelioseismicKernels.hω(nothing, m, xobs1, xobs2, los; ℓ_range = ℓ_range)
+
+				Krθϕₛ₀ = HelioseismicKernels.kernel_uₛ₀_rθϕ(nothing, m, xobs1, xobs2, los; hω=hω, SHModes = SHModes,ℓ_range = ℓ_range, save = false)
+				Krθϕₛ₀_2 = HelioseismicKernels.kernel_uₛ₀_rθϕ_2(nothing, m, xobs1, xobs2, los; hω=hω, SHModes = SHModes,ℓ_range = ℓ_range, save = false)
+
+				Kℑu⁺₁₀ = HelioseismicKernels.kernel_ℑu⁺₁₀(nothing, m, xobs1, xobs2, los; ℓ_range = ℓ_range, hω=hω, save = false);
+				@testset "Ks0 from Kst" begin
+					@test @view(Krθϕₛ₀[:,3,(1,0)]) ≈ Kℑu⁺₁₀
+				end
+				@testset "Ks0 directly" begin
+					@test @view(Krθϕₛ₀_2[:,3,(1,0)]) ≈ Kℑu⁺₁₀
+				end
+			end
+
+			@testset "TravelTimes" begin
+				@testset "radial" begin
+					uniformvalidation(HelioseismicKernels.Flow(), HelioseismicKernels.TravelTimes(), xobs1, xobs2, HelioseismicKernels.los_radial())
+					uniformvalidation(HelioseismicKernels.Flow(), HelioseismicKernels.TravelTimes(), xobs1, xobs2, HelioseismicKernels.los_radial(),
+						SHModes = LM(1:2, 0:2))
+				end
+				@testset "line-of-sight" begin
+					uniformvalidation(HelioseismicKernels.Flow(), HelioseismicKernels.TravelTimes(), xobs1, xobs2, HelioseismicKernels.los_earth())
+					uniformvalidation(HelioseismicKernels.Flow(), HelioseismicKernels.TravelTimes(), xobs1, xobs2, HelioseismicKernels.los_earth(),
+						SHModes = LM(1:2, 0:2))
+				end
+			end
+
+			@testset "Amplitudes" begin
+				@testset "radial" begin
+					uniformvalidation(HelioseismicKernels.Flow(), HelioseismicKernels.Amplitudes(), xobs1, xobs2, HelioseismicKernels.los_radial())
+					uniformvalidation(HelioseismicKernels.Flow(), HelioseismicKernels.Amplitudes(), xobs1, xobs2, HelioseismicKernels.los_radial(),
+						SHModes = LM(1:2, 0:2))
+				end
+				@testset "line-of-sight" begin
+					uniformvalidation(HelioseismicKernels.Flow(), HelioseismicKernels.Amplitudes(), xobs1, xobs2, HelioseismicKernels.los_earth())
+					uniformvalidation(HelioseismicKernels.Flow(), HelioseismicKernels.Amplitudes(), xobs1, xobs2, HelioseismicKernels.los_earth(),
+						SHModes = LM(1:2, 0:2))
+				end
+			end
+		end
+	end;
+
+	@testset "Ks0 computed directly and from Kst" begin
+
+		function test(m, los; SHModes = LM(1:1, 0:0), ℓ_range = 2:2)
 			hω = HelioseismicKernels.hω(nothing, m, xobs1, xobs2, los; ℓ_range = ℓ_range)
 
-			Kδcₛₜ = HelioseismicKernels.kernel_δcₛₜ(nothing, m, xobs1, xobs2, los; ℓ_range = ℓ_range, SHModes = SHModes, hω=hω, save = false);
+			Krθϕₛ₀ = HelioseismicKernels.kernel_uₛ₀_rθϕ(nothing, m, xobs1, xobs2, los; hω=hω,
+						SHModes = SHModes, ℓ_range = ℓ_range, save = false)
+			Krθϕₛ₀_2 = HelioseismicKernels.kernel_uₛ₀_rθϕ_2(nothing, m, xobs1, xobs2, los; hω=hω,
+						SHModes = SHModes, ℓ_range = ℓ_range, save = false)
 
-			Kδc₀₀ = HelioseismicKernels.kernel_δc₀₀(nothing, m, xobs1, xobs2, los; ℓ_range = ℓ_range, hω=hω, save = false);
-
-			@test Kδcₛₜ[:,(0,0)]≈Kδc₀₀
+			@test Krθϕₛ₀ ≈ Krθϕₛ₀_2
 		end
 
-		@testset "TravelTimes" begin
-			@testset "radial" begin
-				uniformvalidation(HelioseismicKernels.SoundSpeed(), HelioseismicKernels.TravelTimes(), xobs1, xobs2, HelioseismicKernels.los_radial())
-				uniformvalidation(HelioseismicKernels.SoundSpeed(), HelioseismicKernels.TravelTimes(), xobs1, xobs2, HelioseismicKernels.los_radial(),
-					SHModes = LM(0:2, 0:2))
+		test(HelioseismicKernels.TravelTimes(), HelioseismicKernels.los_radial())
+		test(HelioseismicKernels.TravelTimes(), HelioseismicKernels.los_radial(), SHModes = LM(0:4, 0:4))
+		test(HelioseismicKernels.TravelTimes(), HelioseismicKernels.los_earth())
+		test(HelioseismicKernels.TravelTimes(), HelioseismicKernels.los_earth(), SHModes = LM(0:4, 0:4))
+	end;
+
+	@testset "multiple points" begin
+		@testset "flows" begin
+			function testmultiplepoints(m, los)
+				ℓ_range = 1:1
+				hω = HelioseismicKernels.hω(nothing, m, xobs1, xobs2, los; ℓ_range = ℓ_range)
+				K = HelioseismicKernels.kernel_ℑu⁺₁₀(nothing, m, n1, n2, los,ℓ_range = ℓ_range, hω = hω,
+					ν_ind_range = axes(hω, 1));
+				K2 = HelioseismicKernels.kernel_ℑu⁺₁₀(nothing, m, n1,[n2], los,ℓ_range = ℓ_range, hω = hω,
+					ν_ind_range = axes(hω, 1));
+				@test K ≈ K2
 			end
-			@testset "line-of-sight" begin
-				uniformvalidation(HelioseismicKernels.SoundSpeed(), HelioseismicKernels.TravelTimes(), xobs1, xobs2, HelioseismicKernels.los_earth())
-				uniformvalidation(HelioseismicKernels.SoundSpeed(), HelioseismicKernels.TravelTimes(), xobs1, xobs2, HelioseismicKernels.los_earth(),
-					SHModes = LM(0:2, 0:2))
+
+			@testset "TravelTimes" begin
+				@testset "radial" begin
+					testmultiplepoints(HelioseismicKernels.TravelTimes(), HelioseismicKernels.los_radial())
+				end
+				@testset "line-of-sight" begin
+					testmultiplepoints(HelioseismicKernels.TravelTimes(), HelioseismicKernels.los_earth())
+				end
+			end
+			@testset "Amplitudes" begin
+				@testset "radial" begin
+					testmultiplepoints(HelioseismicKernels.Amplitudes(), HelioseismicKernels.los_radial())
+				end
+				@testset "line-of-sight" begin
+					testmultiplepoints(HelioseismicKernels.Amplitudes(), HelioseismicKernels.los_earth())
+				end
 			end
 		end
-		@testset "Amplitudes" begin
-			@testset "radial" begin
-				uniformvalidation(HelioseismicKernels.SoundSpeed(), HelioseismicKernels.Amplitudes(), xobs1, xobs2, HelioseismicKernels.los_radial())
-				uniformvalidation(HelioseismicKernels.SoundSpeed(), HelioseismicKernels.Amplitudes(), xobs1, xobs2, HelioseismicKernels.los_radial(),
-					SHModes = LM(0:2, 0:2))
+		@testset "SoundSpeed" begin
+			function testmultiplepoints(m, los)
+				ℓ_range = 1:1
+				hω = HelioseismicKernels.hω(nothing, m, xobs1, xobs2, los; ℓ_range = ℓ_range)
+				K = HelioseismicKernels.kernel_δc₀₀(nothing, m, n1, n2, los, ℓ_range = ℓ_range, hω = hω,
+					ν_ind_range = axes(hω, 1));
+				K2 = HelioseismicKernels.kernel_δc₀₀(nothing, m, n1,[n2], los, ℓ_range = ℓ_range, hω = hω,
+					ν_ind_range = axes(hω, 1));
+				@test K ≈ K2
 			end
-			@testset "line-of-sight" begin
-				uniformvalidation(HelioseismicKernels.SoundSpeed(), HelioseismicKernels.Amplitudes(), xobs1, xobs2, HelioseismicKernels.los_earth())
-				uniformvalidation(HelioseismicKernels.SoundSpeed(), HelioseismicKernels.Amplitudes(), xobs1, xobs2, HelioseismicKernels.los_earth(),
-					SHModes = LM(0:2, 0:2))
+
+			@testset "TravelTimes" begin
+				@testset "radial" begin
+					testmultiplepoints(HelioseismicKernels.TravelTimes(), HelioseismicKernels.los_radial())
+				end
+				@testset "line-of-sight" begin
+					testmultiplepoints(HelioseismicKernels.TravelTimes(), HelioseismicKernels.los_earth())
+				end
+			end
+			@testset "Amplitudes" begin
+				@testset "radial" begin
+					testmultiplepoints(HelioseismicKernels.Amplitudes(), HelioseismicKernels.los_radial())
+				end
+				@testset "line-of-sight" begin
+					testmultiplepoints(HelioseismicKernels.Amplitudes(), HelioseismicKernels.los_earth())
+				end
 			end
 		end
-	end
-
-	@testset "flows" begin
-		function uniformvalidation(::HelioseismicKernels.Flow, m::HelioseismicKernels.SeismicMeasurement, xobs1, xobs2,
-			los::HelioseismicKernels.los_direction = HelioseismicKernels.los_radial();
-			SHModes = LM(1:1, 0:0))
-
-			ℓ_range = 1:1
-
-			hω = HelioseismicKernels.hω(nothing, m, xobs1, xobs2, los; ℓ_range = ℓ_range)
-
-			Krθϕₛ₀ = HelioseismicKernels.kernel_uₛ₀_rθϕ(nothing, m, xobs1, xobs2, los; hω=hω, SHModes = SHModes,ℓ_range = ℓ_range, save = false)
-			Krθϕₛ₀_2 = HelioseismicKernels.kernel_uₛ₀_rθϕ_2(nothing, m, xobs1, xobs2, los; hω=hω, SHModes = SHModes,ℓ_range = ℓ_range, save = false)
-
-			Kℑu⁺₁₀ = HelioseismicKernels.kernel_ℑu⁺₁₀(nothing, m, xobs1, xobs2, los; ℓ_range = ℓ_range, hω=hω, save = false);
-			@testset "Ks0 from Kst" begin
-				@test @view(Krθϕₛ₀[:,3,(1,0)]) ≈ Kℑu⁺₁₀
-			end
-			@testset "Ks0 directly" begin
-				@test @view(Krθϕₛ₀_2[:,3,(1,0)]) ≈ Kℑu⁺₁₀
-			end
-		end
-
-		@testset "TravelTimes" begin
-			@testset "radial" begin
-				uniformvalidation(HelioseismicKernels.Flow(), HelioseismicKernels.TravelTimes(), xobs1, xobs2, HelioseismicKernels.los_radial())
-				uniformvalidation(HelioseismicKernels.Flow(), HelioseismicKernels.TravelTimes(), xobs1, xobs2, HelioseismicKernels.los_radial(),
-					SHModes = LM(1:2, 0:2))
-			end
-			@testset "line-of-sight" begin
-				uniformvalidation(HelioseismicKernels.Flow(), HelioseismicKernels.TravelTimes(), xobs1, xobs2, HelioseismicKernels.los_earth())
-				uniformvalidation(HelioseismicKernels.Flow(), HelioseismicKernels.TravelTimes(), xobs1, xobs2, HelioseismicKernels.los_earth(),
-					SHModes = LM(1:2, 0:2))
-			end
-		end
-
-		@testset "Amplitudes" begin
-			@testset "radial" begin
-				uniformvalidation(HelioseismicKernels.Flow(), HelioseismicKernels.Amplitudes(), xobs1, xobs2, HelioseismicKernels.los_radial())
-				uniformvalidation(HelioseismicKernels.Flow(), HelioseismicKernels.Amplitudes(), xobs1, xobs2, HelioseismicKernels.los_radial(),
-					SHModes = LM(1:2, 0:2))
-			end
-			@testset "line-of-sight" begin
-				uniformvalidation(HelioseismicKernels.Flow(), HelioseismicKernels.Amplitudes(), xobs1, xobs2, HelioseismicKernels.los_earth())
-				uniformvalidation(HelioseismicKernels.Flow(), HelioseismicKernels.Amplitudes(), xobs1, xobs2, HelioseismicKernels.los_earth(),
-					SHModes = LM(1:2, 0:2))
-			end
-		end
-	end
-end;
-
-@testset "Ks0 computed directly and from Kst" begin
-
-	function test(m, los; SHModes = LM(1:1, 0:0), ℓ_range = 2:2)
-		hω = HelioseismicKernels.hω(nothing, m, xobs1, xobs2, los; ℓ_range = ℓ_range)
-
-		Krθϕₛ₀ = HelioseismicKernels.kernel_uₛ₀_rθϕ(nothing, m, xobs1, xobs2, los; hω=hω,
-					SHModes = SHModes, ℓ_range = ℓ_range, save = false)
-		Krθϕₛ₀_2 = HelioseismicKernels.kernel_uₛ₀_rθϕ_2(nothing, m, xobs1, xobs2, los; hω=hω,
-					SHModes = SHModes, ℓ_range = ℓ_range, save = false)
-
-		@test Krθϕₛ₀ ≈ Krθϕₛ₀_2
-	end
-
-	test(HelioseismicKernels.TravelTimes(), HelioseismicKernels.los_radial())
-	test(HelioseismicKernels.TravelTimes(), HelioseismicKernels.los_radial(), SHModes = LM(0:4, 0:4))
-	test(HelioseismicKernels.TravelTimes(), HelioseismicKernels.los_earth())
-	test(HelioseismicKernels.TravelTimes(), HelioseismicKernels.los_earth(), SHModes = LM(0:4, 0:4))
-end;
-
-@testset "multiple points" begin
-	@testset "flows" begin
-		function testmultiplepoints(m, los)
-			ℓ_range = 1:1
-			hω = HelioseismicKernels.hω(nothing, m, xobs1, xobs2, los; ℓ_range = ℓ_range)
-			K = HelioseismicKernels.kernel_ℑu⁺₁₀(nothing, m, n1, n2, los,ℓ_range = ℓ_range, hω = hω,
-				ν_ind_range = axes(hω, 1));
-			K2 = HelioseismicKernels.kernel_ℑu⁺₁₀(nothing, m, n1,[n2], los,ℓ_range = ℓ_range, hω = hω,
-				ν_ind_range = axes(hω, 1));
-			@test K ≈ K2
-		end
-
-		@testset "TravelTimes" begin
-			@testset "radial" begin
-				testmultiplepoints(HelioseismicKernels.TravelTimes(), HelioseismicKernels.los_radial())
-			end
-			@testset "line-of-sight" begin
-				testmultiplepoints(HelioseismicKernels.TravelTimes(), HelioseismicKernels.los_earth())
-			end
-		end
-		@testset "Amplitudes" begin
-			@testset "radial" begin
-				testmultiplepoints(HelioseismicKernels.Amplitudes(), HelioseismicKernels.los_radial())
-			end
-			@testset "line-of-sight" begin
-				testmultiplepoints(HelioseismicKernels.Amplitudes(), HelioseismicKernels.los_earth())
-			end
-		end
-	end
-	@testset "SoundSpeed" begin
-		function testmultiplepoints(m, los)
-			ℓ_range = 1:1
-			hω = HelioseismicKernels.hω(nothing, m, xobs1, xobs2, los; ℓ_range = ℓ_range)
-			K = HelioseismicKernels.kernel_δc₀₀(nothing, m, n1, n2, los, ℓ_range = ℓ_range, hω = hω,
-				ν_ind_range = axes(hω, 1));
-			K2 = HelioseismicKernels.kernel_δc₀₀(nothing, m, n1,[n2], los, ℓ_range = ℓ_range, hω = hω,
-				ν_ind_range = axes(hω, 1));
-			@test K ≈ K2
-		end
-
-		@testset "TravelTimes" begin
-			@testset "radial" begin
-				testmultiplepoints(HelioseismicKernels.TravelTimes(), HelioseismicKernels.los_radial())
-			end
-			@testset "line-of-sight" begin
-				testmultiplepoints(HelioseismicKernels.TravelTimes(), HelioseismicKernels.los_earth())
-			end
-		end
-		@testset "Amplitudes" begin
-			@testset "radial" begin
-				testmultiplepoints(HelioseismicKernels.Amplitudes(), HelioseismicKernels.los_radial())
-			end
-			@testset "line-of-sight" begin
-				testmultiplepoints(HelioseismicKernels.Amplitudes(), HelioseismicKernels.los_earth())
-			end
-		end
-	end
+	end;
 end;
