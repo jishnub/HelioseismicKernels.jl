@@ -885,58 +885,41 @@ function kernel_uₛ₀_rθϕ_partial_2(localtimer, ℓ_ωind_iter_on_proc::Prod
 	return Array(_K)
 end
 
-function _K_uₛₜ(comm, m::SeismicMeasurement, xobs1, xobs2, los::los_direction, args...; kwargs...)
-	r_src, = read_rsrc_robs_c_scale(kwargs)
-	p_Gsrc, p_Gobs1, p_Gobs2 = read_parameters_for_points(xobs1, xobs2; kwargs...)
-	@unpack ν_arr, ℓ_arr = p_Gsrc
-	iters = ℓ_and_ν_range(ℓ_arr,ν_arr; kwargs...)
-
-	hω_arr = get(kwargs, :hω) do
-		h = hω(comm, m, xobs1, xobs2, los; kwargs..., print_timings = false)
-		_broadcast(h, 0, comm)
-	end
-
-	K_uₛₜ = pmapsum(comm, kernel_uₛₜ_partial, iters,
-		xobs1, xobs2, los, args..., hω_arr, p_Gsrc, p_Gobs1, p_Gobs2, r_src)
-
-	return iters..., K_uₛₜ
-end
-
 # Compute Kₛₜ first and then compute Kₛ₀_rθϕ from that
-function _K_uₛ₀_rθϕ(comm, m::SeismicMeasurement, xobs1, xobs2, los::los_direction, args...; kwargs...)
-	r_src, = read_rsrc_robs_c_scale(kwargs)
-	p_Gsrc, p_Gobs1, p_Gobs2 = read_parameters_for_points(xobs1, xobs2; kwargs...)
-	@unpack ν_arr, ℓ_arr = p_Gsrc
-	iters = ℓ_and_ν_range(ℓ_arr, ν_arr; kwargs...)
+# function _K_uₛ₀_rθϕ(comm, m::SeismicMeasurement, xobs1, xobs2, los::los_direction, args...; kwargs...)
+# 	r_src, = read_rsrc_robs_c_scale(kwargs)
+# 	p_Gsrc, p_Gobs1, p_Gobs2 = read_parameters_for_points(xobs1, xobs2; kwargs...)
+# 	@unpack ν_arr, ℓ_arr = p_Gsrc
+# 	iters = ℓ_and_ν_range(ℓ_arr, ν_arr; kwargs...)
 
-	hω_arr = get(kwargs, :hω) do
-		h = hω(comm, m, xobs1, xobs2, los; kwargs..., print_timings = false)
-		_broadcast(h, 0, comm)
-	end
+# 	hω_arr = get(kwargs, :hω) do
+# 		h = hω(comm, m, xobs1, xobs2, los; kwargs..., print_timings = false)
+# 		_broadcast(h, 0, comm)
+# 	end
 
-	K_uₛ₀ = pmapsum(comm, kernel_uₛ₀_rθϕ_partial, iters,
-		xobs1, xobs2, los, args..., hω_arr, p_Gsrc, p_Gobs1, p_Gobs2, r_src)
+# 	K_uₛ₀ = pmapsum(comm, kernel_uₛ₀_rθϕ_partial, iters,
+# 		xobs1, xobs2, los, args..., hω_arr, p_Gsrc, p_Gobs1, p_Gobs2, r_src)
 
-	return iters..., K_uₛ₀
-end
+# 	return iters..., K_uₛ₀
+# end
 
 # Compute Kₛ₀_rθϕ directly
-function _K_uₛ₀_rθϕ_2(comm, m::SeismicMeasurement, xobs1, xobs2, los::los_direction, args...; kwargs...)
-	r_src, = read_rsrc_robs_c_scale(kwargs)
-	p_Gsrc, p_Gobs1, p_Gobs2 = read_parameters_for_points(xobs1, xobs2; kwargs...)
-	@unpack ν_arr, ℓ_arr = p_Gsrc
-	iters = ℓ_and_ν_range(ℓ_arr,ν_arr; kwargs...)
+# function _K_uₛ₀_rθϕ_2(comm, m::SeismicMeasurement, xobs1, xobs2, los::los_direction, args...; kwargs...)
+# 	r_src, = read_rsrc_robs_c_scale(kwargs)
+# 	p_Gsrc, p_Gobs1, p_Gobs2 = read_parameters_for_points(xobs1, xobs2; kwargs...)
+# 	@unpack ν_arr, ℓ_arr = p_Gsrc
+# 	iters = ℓ_and_ν_range(ℓ_arr,ν_arr; kwargs...)
 
-	hω_arr = get(kwargs, :hω) do
-		h = hω(comm, m, xobs1, xobs2, los; kwargs..., print_timings = false)
-		_broadcast(h, 0, comm)
-	end
+# 	hω_arr = get(kwargs, :hω) do
+# 		h = hω(comm, m, xobs1, xobs2, los; kwargs..., print_timings = false)
+# 		_broadcast(h, 0, comm)
+# 	end
 
-	K_uₛ₀ = pmapsum(comm, kernel_uₛ₀_rθϕ_partial_2, iters,
-		xobs1, xobs2, los, args..., hω_arr, p_Gsrc, p_Gobs1, p_Gobs2, r_src)
+# 	K_uₛ₀ = pmapsum(comm, kernel_uₛ₀_rθϕ_partial_2, iters,
+# 		xobs1, xobs2, los, args..., hω_arr, p_Gsrc, p_Gobs1, p_Gobs2, r_src)
 
-	return iters..., K_uₛ₀
-end
+# 	return iters..., K_uₛ₀
+# end
 
 function generatefitsheader(xobs1, xobs2, SHModes, j_range, ν_ind_range)
 	FITSHeader(["r1","th1","phi1","r2","th2","phi2",
@@ -975,7 +958,20 @@ function kernel_uₛₜ(comm, m::SeismicMeasurement, xobs1, xobs2,
 
 	SHModes = getkernelmodes(; kwargs...)
 
-	j_range, ν_ind_range, K_δτ_uₛₜ = _K_uₛₜ(comm, m, xobs1, xobs2, los, SHModes; kwargs...)
+	r_src, = read_rsrc_robs_c_scale(kwargs)
+	p_Gsrc, p_Gobs1, p_Gobs2 = read_parameters_for_points(xobs1, xobs2; kwargs...)
+	@unpack ν_arr, ℓ_arr = p_Gsrc
+	iters = ℓ_and_ν_range(ℓ_arr,ν_arr; kwargs...)
+	j_range, ν_ind_range = iters
+
+	hω_arr = get(kwargs, :hω) do
+		h = hω(comm, m, xobs1, xobs2, los; kwargs..., print_timings = false)
+		_broadcast(h, 0, comm)
+	end
+
+	K_δτ_uₛₜ = pmapsum(comm, kernel_uₛₜ_partial, iters,
+		xobs1, xobs2, los, SHModes, hω_arr, p_Gsrc, p_Gobs1, p_Gobs2, r_src)
+
 	K_δτ_uₛₜ === nothing  && return nothing
 	K = OffsetArray(K_δτ_uₛₜ, :, -1:1, :)
 
@@ -1005,7 +1001,20 @@ function kernel_uₛ₀_rθϕ(comm, m::SeismicMeasurement, xobs1, xobs2, los::lo
 	_SHModes = getkernelmodes(; kwargs...)
 	SHModes = LM(l_range(_SHModes), 0)
 
-	j_range, ν_ind_range, K_δτ_uₛ₀ = _K_uₛ₀_rθϕ(comm, m, xobs1, xobs2, los, SHModes; kwargs...)
+	r_src, = read_rsrc_robs_c_scale(kwargs)
+	p_Gsrc, p_Gobs1, p_Gobs2 = read_parameters_for_points(xobs1, xobs2; kwargs...)
+	@unpack ν_arr, ℓ_arr = p_Gsrc
+	iters = ℓ_and_ν_range(ℓ_arr, ν_arr; kwargs...)
+	j_range, ν_ind_range = iters
+
+	hω_arr = get(kwargs, :hω) do
+		h = hω(comm, m, xobs1, xobs2, los; kwargs..., print_timings = false)
+		_broadcast(h, 0, comm)
+	end
+
+	K_δτ_uₛ₀ = pmapsum(comm, kernel_uₛ₀_rθϕ_partial, iters,
+		xobs1, xobs2, los, SHModes, hω_arr, p_Gsrc, p_Gobs1, p_Gobs2, r_src)
+
 	K_δτ_uₛ₀ === nothing  && return nothing
 
 	if get(kwargs, :save, true)
@@ -1027,7 +1036,19 @@ function kernel_uₛ₀_rθϕ_2(comm, m::SeismicMeasurement, xobs1, xobs2, los::
 	_SHModes = getkernelmodes(; kwargs...)
 	SHModes = LM(l_range(_SHModes), 0)
 
-	j_range, ν_ind_range, K_δτ_uₛ₀ = _K_uₛ₀_rθϕ_2(comm, m, xobs1, xobs2, los, SHModes; kwargs...)
+	r_src, = read_rsrc_robs_c_scale(kwargs)
+	p_Gsrc, p_Gobs1, p_Gobs2 = read_parameters_for_points(xobs1, xobs2; kwargs...)
+	@unpack ν_arr, ℓ_arr = p_Gsrc
+	iters = ℓ_and_ν_range(ℓ_arr,ν_arr; kwargs...)
+	j_range, ν_ind_range = iters
+
+	hω_arr = get(kwargs, :hω) do
+		h = hω(comm, m, xobs1, xobs2, los; kwargs..., print_timings = false)
+		_broadcast(h, 0, comm)
+	end
+
+	K_δτ_uₛ₀ = pmapsum(comm, kernel_uₛ₀_rθϕ_partial_2, iters,
+		xobs1, xobs2, los, SHModes, hω_arr, p_Gsrc, p_Gobs1, p_Gobs2, r_src)
 
 	K_δτ_uₛ₀ === nothing  && return nothing
 	if get(kwargs, :save, true)

@@ -3,7 +3,7 @@
 ###########################################################################################
 const DerivStencilScratch = Dict{NTuple{2,Int}, Matrix{Float64}}()
 
-function derivStencil(order::Integer, ptsleft::Integer, ptsright::Integer; gridspacing::Real = 1)
+function derivStencil(order::Integer, ptsleft::Integer, ptsright::Integer; gridspacing::Real = 1, kw...)
 
 	invM = get!(DerivStencilScratch, (ptsleft, ptsright)) do
 		M = zeros(ptsleft + ptsright + 1, ptsleft + ptsright + 1)
@@ -33,7 +33,7 @@ function derivStencil(order::Integer, N::Integer; kwargs...)
 	end
 end
 
-function derivStencil!(v, order::Integer, ptsleft::Integer, ptsright::Integer; gridspacing::Real = 1)
+function derivStencil!(v, order::Integer, ptsleft::Integer, ptsright::Integer; gridspacing::Real = 1, kw...)
 
 	invM = get!(DerivStencilScratch, (ptsleft, ptsright)) do
 		M = zeros(ptsleft + ptsright + 1, ptsleft + ptsright + 1)
@@ -84,19 +84,11 @@ function D(N; stencil_gridpts = Dict(6=>3, 42=>5), #= Dictionary of gridpt => or
 
 	@assert(N≥2,"Need at least 2 points to compute the derivative")
 
-	N_cols = N
-	if left_edge_ghost
-		N_cols += 1
-	end
-	if right_edge_ghost
-		N_cols += 1
-	end
-
-	S = zeros(N, N_cols)
+	S = zeros(N, N)
 
 	D!(S, N; stencil_gridpts = stencil_gridpts,
-		left_edge_npts = left_edge_npts, left_edge_ghost = left_edge_ghost,
-		right_edge_npts = right_edge_npts, right_edge_ghost = right_edge_ghost,
+		left_edge_npts = left_edge_npts,
+		right_edge_npts = right_edge_npts,
 		left_Dirichlet = left_Dirichlet,
 		right_Dirichlet = right_Dirichlet,
 		kwargs...)
@@ -105,23 +97,14 @@ function D(N; stencil_gridpts = Dict(6=>3, 42=>5), #= Dictionary of gridpt => or
 end
 
 function D!(S, N; stencil_gridpts = Dict(6=>3, 42=>5), #= Dictionary of gridpt => order of derivative upto that gridpt =#
-	left_edge_npts = 2, left_edge_ghost = false,
-	right_edge_npts = 2, right_edge_ghost = false,
+	left_edge_npts = 2,
+	right_edge_npts = 2,
 	left_Dirichlet = false,
 	right_Dirichlet = false,
 	kwargs...)
 
 	@assert(N≥2,"Need at least 2 points to compute the derivative")
-
-	N_cols = N
-	if left_edge_ghost
-		N_cols += 1
-	end
-	if right_edge_ghost
-		N_cols += 1
-	end
-
-	@assert size(S) == (N, N_cols) "Size of matrix must be $((N, N_cols))"
+	@assert size(S) == (N, N) "Size of matrix must be $((N, N))"
 
 	gridpt_cutoffs_list = sort(collect(keys(stencil_gridpts)))
 	maxorder = maximum(values(stencil_gridpts))
@@ -130,43 +113,11 @@ function D!(S, N; stencil_gridpts = Dict(6=>3, 42=>5), #= Dictionary of gridpt =
 
 	# Derivatives on the boundary
 
-	if left_edge_ghost
-		startpt = 2 - div(left_edge_npts, 2)
-		endpt = startpt + left_edge_npts-1
-		if startpt >=1
-			v = @view S[1, startpt:endpt]
-			derivStencil!(v, 1, left_edge_npts; kwargs...)
-		else
-			v = @view S[1, 1:left_edge_npts]
-			derivStencil!(v, 1, 1, left_edge_npts-2; kwargs...)
-		end
-	else
-		if left_Dirichlet
-			S[1, 1:left_edge_npts-1] .= @view derivStencil(1, 1, left_edge_npts-2; kwargs...)[2:end]
-		else
-			v = @view S[1, 1:left_edge_npts]
-			derivStencil!(v, 1, 0, left_edge_npts-1; kwargs...)
-		end
-	end
+	v = @view S[1, 1:left_edge_npts]
+	derivStencil!(v, 1, 0, left_edge_npts-1; kwargs...)
 
-	if right_edge_ghost
-		endpt = N +  div(right_edge_npts, 2) + ( left_edge_ghost ? 1 : 0 )
-		startpt = endpt - right_edge_npts + 1
-		if endpt<=N_cols
-			v = @view S[end, startpt:endpt]
-			derivStencil!(v, 1, right_edge_npts; kwargs...)
-		else
-			v = @view S[end, (N_cols-right_edge_npts + 1):N_cols]
-			derivStencil!(v, 1, right_edge_npts-2, 1; kwargs...)
-		end
-	else
-		if right_Dirichlet
-			S[end, (N_cols-right_edge_npts + 2):N_cols] .= @view derivStencil(1, right_edge_npts-2, 1; kwargs...)[1:end-1]
-		else
-			v = @view S[end, (N_cols-right_edge_npts + 1):N_cols]
-			derivStencil!(v, 1, right_edge_npts-1, 0; kwargs...)
-		end
-	end
+	v = @view S[end, (N-right_edge_npts + 1):N]
+	derivStencil!(v, 1, right_edge_npts-1, 0; kwargs...)
 
 	for gridpt in 2:N-1
 
@@ -177,14 +128,21 @@ function D!(S, N; stencil_gridpts = Dict(6=>3, 42=>5), #= Dictionary of gridpt =
 			npts = nextodd(maxorder)
 		end
 
-		diagpt = gridpt + ( left_edge_ghost ? 1 : 0 )
-		startpt = max(1, diagpt - div(npts, 2)-(diagpt + div(npts, 2) > N_cols ? diagpt + div(npts, 2) - N_cols : 0 ))
-		endpt = min(N_cols, startpt + npts -1)
+		diagpt = gridpt
+		startpt = max(1, diagpt - div(npts, 2)-(diagpt + div(npts, 2) > N ? diagpt + div(npts, 2) - N_cols : 0 ))
+		endpt = min(N, startpt + npts -1)
 		npts_left = diagpt - startpt
 		npts_right = endpt - diagpt
 
 		v = @view S[gridpt, startpt:endpt]
 		derivStencil!(v, 1, npts_left, npts_right; kwargs...)
+	end
+
+	if left_Dirichlet
+		S[1:2, 1] .= 0
+	end
+	if right_Dirichlet
+		S[end-1:end, end] .= 0
 	end
 
 	return S

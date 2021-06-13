@@ -636,7 +636,7 @@ function CΔϕω_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit,
 	Gfn_path_src, NGfn_files_src = p_Gsrc.path, p_Gsrc.num_procs
 	@unpack ℓ_arr, ω_arr, Nν_Gfn = p_Gsrc
 
-	ℓ_arr, ν_ind_range = ParallelUtilities.getiterators(ℓ_ωind_iter_on_proc)
+	_, ν_ind_range = ParallelUtilities.getiterators(ℓ_ωind_iter_on_proc)
 
 	r₁_ind, r₂_ind = radial_grid_index.((r₁, r₂))
 
@@ -647,10 +647,9 @@ function CΔϕω_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit,
 
 	Cϕω_arr = zeros(ComplexF64, nϕ, ν_ind_range)
 
-	ℓ_range = UnitRange(extremaelement(ℓ_ωind_iter_on_proc, dims = 1)...)
 	n1 = Point2D(pi/2, 0)
 	n2_arr = Point2D.(pi/2, Δϕ_arr)
-	Y12 = los_projected_biposh_spheroidal(computeY₀₀, n1, n2_arr, los, ℓ_range)
+	Y12 = los_projected_biposh_spheroidal(computeY₀₀, n1, n2_arr, los, ℓ_ωind_iter_on_proc)
 
 	@unpack α_r₁, α_r₂ = allocateGfn(los, r₁_ind == r₂_ind)
 
@@ -660,13 +659,14 @@ function CΔϕω_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit,
 
 		read_Gfn_file_at_index!(α_r₁, Gfn_fits_files_src,
 		(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, obsindFITS(los), 1, r₁_ind, 1)
+
 		if r₁_ind != r₂_ind
 			read_Gfn_file_at_index!(α_r₂, Gfn_fits_files_src,
 			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, obsindFITS(los), 1, r₂_ind, 1)
 		end
 
 		for ϕ_ind in 1:nϕ
-			Cϕω_arr[ϕ_ind, ω_ind] += Cωℓ(los_radial(), ω, ℓ, α_r₁, α_r₂, Y12[ϕ_ind, ℓ])
+			Cϕω_arr[ϕ_ind, ω_ind] += Cωℓ(los, ω, ℓ, α_r₁, α_r₂, Y12[ϕ_ind, ℓ])
 		end
 	end
 	closeGfnfits(Gfn_fits_files_src)
@@ -675,13 +675,13 @@ end
 
 function CΔϕω(comm, r₁ = r_obs_default, r₂ = r_obs_default,
 	los::los_radial = los_radial(); kwargs...)
+
 	r_src, _, c_scale = read_rsrc_robs_c_scale(kwargs)
 	p_Gsrc = read_all_parameters(; kwargs...)
 	@unpack Nν_Gfn, ν_arr, ℓ_arr, ν_start_zeros, ν_end_zeros = p_Gsrc
-	ℓ_range,ν_ind_range = ℓ_and_ν_range(ℓ_arr, ν_arr; kwargs...)
-	lmax = maximum(ℓ_range)
+	ℓ_range, ν_ind_range = ℓ_and_ν_range(ℓ_arr, ν_arr; kwargs...)
 
-	Δϕ_arr = get(kwargs, :Δϕ_arr, LinRange(0, π, lmax+1)[1:end-1])
+	Δϕ_arr = get(kwargs, :Δϕ_arr, LinRange(0, π, 100))
 
 	Cω_in_range = pmapsum(comm, CΔϕω_partial, (ℓ_range, ν_ind_range),
 			r₁, r₂, los, Δϕ_arr, p_Gsrc, r_src, c_scale)
@@ -709,12 +709,12 @@ function CtΔϕ(comm, r₁ = r_obs_default, r₂ = r_obs_default,
 
 	τ_ind_range = get(kwargs, :τ_ind_range, Colon())
 	if !(τ_ind_range isa Colon)
-		CtΔϕ = CtΔϕ[τ_ind_range,..]
+		CtΔϕ = CtΔϕ[τ_ind_range, ..]
 	end
 
 	if get(kwargs, :save, true)
 		tag = los isa los_radial ? "" : "_los"
-		filename = "C_t_phi$tag.fits"
+		filename = joinpath(SCRATCH_kerneldir[], "C_t_phi$tag.fits")
 		FITSIO.fitswrite(filename, CtΔϕ)
 	end
 	return CtΔϕ
@@ -729,7 +729,7 @@ function CΔϕt(comm, r₁ = r_obs_default, r₂ = r_obs_default,
 
 	if get(kwargs, :save, true)
 		tag = los isa los_radial ? "" : "_los"
-		filename = "C_phi_t$tag.fits"
+		filename = joinpath(SCRATCH_kerneldir[], "C_phi_t$tag.fits")
 		FITSIO.fitswrite(filename, C)
 	end
 	return C
@@ -856,8 +856,8 @@ end
 @two_points_on_the_surface Cτ_rotating
 
 # Without los, radial components, multiple 3D points
-function Cτ_rotating(comm, xobs1, xobs2_arr::Vector{T}, los::los_direction = los_radial();
-	Ω_rot = 20e2/Rsun,τ_ind_range = nothing, kwargs...) where {T<:SphericalPoint}
+function Cτ_rotating(comm, xobs1, xobs2_arr::Vector{<:SphericalPoint}, los::los_direction = los_radial();
+	Ω_rot = 20e2/Rsun, τ_ind_range = nothing, kwargs...)
 
 	# Return C(Δϕ, ω) = RFFT(C(Δϕ,τ)) = RFFT(IRFFT(C0(Δϕ - Ωτ, ω))(τ))
 	p_Gsrc = read_all_parameters(; kwargs...)
@@ -1557,6 +1557,38 @@ end
 # Window function
 ########################################################################################################################
 
+function ridgefilterspectra(Cωℓ, ν_arr, nγ = 10)
+	Nν_Gfn = length(ν_arr)
+	map(axes(Cωℓ, 2)) do ℓ
+		Cℓ = @view Cωℓ[:, ℓ];
+		Cℓ = diff(sign.(diff(Cℓ)));
+		ν_inds = findall(isequal(-2), Cℓ)
+		ν_ℓ = ν_arr[ν_inds]
+		γ_ℓ = γ_damping.(ν_ℓ * 2pi) ./ 2pi
+		ν_low = ν_ℓ .- nγ * γ_ℓ
+		ν_low_inds = clamp.(searchsortedfirst.((ν_arr,), ν_low), 1, Nν_Gfn)
+		ν_high = ν_ℓ .+ nγ * γ_ℓ
+		ν_high_inds = clamp.(searchsortedfirst.((ν_arr,), ν_high), 1, Nν_Gfn)
+		inds = UnitRange{Int}[]
+		iters = zip(ν_low_inds, ν_high_inds)
+		for (ind, (ν_low_ind, ν_high_ind)) in enumerate(iters)
+			if ind == length(iters)
+				push!(inds, ν_low_ind:ν_high_ind)
+				continue
+			end
+			next_low_ind = minimum(@view ν_low_inds[ind+1:end])
+			if ν_high_ind < next_low_ind
+				# isolated peak
+				push!(inds, ν_low_ind:ν_high_ind)
+			else
+				push!(inds, ν_low_ind:ν_high_inds[end])
+				break
+			end
+		end
+		inds
+	end
+end
+
 function bounce_filter(Δϕ, n)
 	nparams = 5
 	coeffs = Dict()
@@ -1659,10 +1691,10 @@ function ht(::TravelTimes, Cω_x1x2::AbstractArray, xobs1, xobs2; bounce_no = 1,
 	p_Gsrc = read_all_parameters(; kwargs...)
 	@unpack ν_full, Nt, dt, dν = p_Gsrc
 
-	ω_full = 2π.*ν_full
+	ω_full = 2π*ν_full
 
 	C_t = fft_ω_to_t(Cω_x1x2, dν)
-	∂tCt_ω = @. Cω_x1x2*im*ω_full
+	∂tCt_ω = @. Cω_x1x2 * im * ω_full
 	∂tCt = fft_ω_to_t(∂tCt_ω, dν)
 
 	τ_ind_range = get(kwargs, :τ_ind_range, nothing)

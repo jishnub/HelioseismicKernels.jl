@@ -22,7 +22,6 @@ using SphericalHarmonicModes
 
 @everywhere begin
 	using ParallelUtilities
-	using NumericallyIntegrateArrays
 	using DistributedArrays
 end
 

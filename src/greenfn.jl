@@ -163,7 +163,7 @@ function load_solar_model()
 
 	N2 = @. g * modelS_detailed[r_start_ind:-1:1, 15]::Vector{Float64} / r
 
-	return Rsun, nr, r, dr, ddr, c,ρ, g, N2,γ_damping
+	return Rsun, nr, r, dr, ddr, c,ρ, g, N2, γ_damping
 end
 
 const Rsun, nr, r, dr, ddr, c, ρ, g, N2, γ_damping = load_solar_model()
@@ -194,100 +194,11 @@ end
 
 delta_fn_gaussian_approx(r_src, σsrc) = @. exp(-(r - r_src)^2 / 2σsrc^2) / √(2π*σsrc^2) /r^2;
 
-function source!(Sh, ω, ℓ, delta_fn)
-    @views @. Sh[nr+1:end] = -√(ℓ*(ℓ+1))/ω^2 * delta_fn[2:nr-1] /(r[2:nr-1]*ρ[2:nr-1])
-    return Sh;
-end
 
-function ℒr!(L14, L22, L33, L41, c′; stencil_gridpts = Dict(6=>3, 42=>5), kw...)
-    # Left edge ghost to use point β(r_in) in computing derivatives
-    # Dirichlet condition β(r_out)=0 on the right edge
-    dbydr!(L14, (@view dr[2:end-1]), stencil_gridpts = stencil_gridpts,
-                left_edge_ghost = true, left_edge_npts = 3,
-                right_edge_ghost = false, right_edge_npts = 3,
-                right_Dirichlet = true) # (nr-2 x nr-1)
-
-    dinds = diagind(L14, 1)
-    @views @. L14[dinds] += g[2:nr-1]/c′[2:nr-1]^2
-
-    # Boundary condition on α(r_out)
-    bc_val = 2/r[end] - g[end]/c′[end]^2
-    derivStencil!(L22, 1, 2, 0, gridspacing = dr[end])
-    L22[end] += bc_val
-
-    # Boundary condition on β(r_in)
-    bc_val = g[1]/c′[1]^2
-    derivStencil!(L33, 1, 0, 2, gridspacing = dr[1])
-    L33[1] += bc_val
-
-    # Right edge ghost to use point α(r_out) in computing derivatives
-    # Dirichlet condition α(r_in)=0 on the left edge
-    dbydr!(L41, (@view dr[2:end-1]), stencil_gridpts = stencil_gridpts,
-                left_edge_ghost = false, left_edge_npts = 3,
-                right_edge_ghost = true, right_edge_npts = 3,
-                left_Dirichlet = true) # (nr-2 x nr-1)
-
-    dinds = diagind(L41, 0)
-    @views @. L41[dinds] += (2/r - g/c′^2)[2:end-1]
-
-	return L14, L22, L33, L41
-end
 
 Ω(ℓ, N) = √((ℓ+N)*(ℓ-N+1)/2)
 ζjₒjₛs(j₁, j₂, ℓ) = (Ω(j₁, 0)^2 + Ω(j₂, 0)^2 - Ω(ℓ, 0)^2)/(Ω(j₁, 0)*Ω(j₂, 0))
 Njₒjₛs(jₒ, jₛ, s) = √((2jₒ+1)*(2jₛ+1)/(4π*(2s+1)))
-
-function copyto_fixedterms!(M, L14, L22, L33, L41, invρc′², ρN2′)
-	# top left
-	dinds = diagind(M)[1:nr-2]
-	for (ind1, ind2) in zip(dinds, 2:nr-1)
-    	M[ind1] = ρN2′[ind2]
-	end
-
-	# top right, ∂ᵣβ, (nr-2 x nr-1)
-    M[1:nr-2, end-(nr-2):end] = L14
-
-	# Boundary condition on α(r_out) (∂ᵣ + 2/r - g/c^2)α(r_out)
-    M[nr-1, nr-3:nr-1] = L22
-
-	# Boundary condition on β(r_in) (∂ᵣ + g/c^2)β(r_in)
-    M[nr, nr:nr+2] = L33
-
-	# bottom left ∂ᵣα, (nr-2 x nr-1)
-    M[nr+1:end, 1:nr-1] = L41
-
-	# bottom right
-    dinds = diagind(M)[nr+1:end]
-	for (ind1, ind2) in zip(dinds, 2:nr-1)
-    	M[ind1] = invρc′²[ind2]
-	end
-	return M
-end
-
-function ℒωℓr!(M_ωℓ, ℓωind, ω, ℓ, L14, L22, L33, L41, c′, invρc′², ρN2′, invρr²; kw...)
-
-	if ℓωind == 1
-		ℒr!(L14, L22, L33, L41, c′; kw...)
-	end
-	ωC = ω - im * γ_damping(ω)
-
-    dinds1 = diagind(M_ωℓ)[1:nr-2]
-	M_ωℓ[dinds1] .= 0
-    dinds2 = diagind(M_ωℓ)[nr+1:end]
-	M_ωℓ[dinds2] .= 0
-
-	copyto_fixedterms!(M_ωℓ, L14, L22, L33, L41, invρc′², ρN2′)
-	negω² = -ωC^2
-	ℓℓp1overnegω² = ℓ*(ℓ+1) / negω²
-	for (ind1, ind2) in zip(dinds1, 2:nr-1)
-		M_ωℓ[ind1] += negω² * ρ[ind2]
-	end
-	for (ind1, ind2) in zip(dinds2, 2:nr-1)
-		M_ωℓ[ind1] += ℓℓp1overnegω² * invρr²[ind2]
-	end
-
-	return M_ωℓ
-end
 
 # Functions to write the frequency grid and other parameters to the data directory
 
@@ -393,22 +304,62 @@ get_numprocs(path) = load(joinpath(path, "parameters.jld2"), "num_procs")
 # We solve in the Hansen VSH basis first and change over to the PB basis
 
 function solve_for_components!(M, S, α, β)
-
 	H = M\S # solve the equation
 
-	@views @. α[2:nr] = H[1:nr-1]
-	@views @. β[1:nr-1] = H[nr:end]
+	@views @. α = H[1:nr]
+	@views @. β = H[nr+1:end]
     return α, β
 end
 
-function greenfn_components_onemode!(ℓωind, ω, ℓ, αrℓω, βrℓω, αhℓω, βhℓω, M_ωℓ,
-	L14, L22, L33, L41, Sr, Sh, delta_fn, c′, invρc′², ρN2′, invρr²; kwargs...)
+function source!(Sh, ω, ℓ, delta_fn)
+    @views @. Sh[nr+1:end-1] = -√(ℓ*(ℓ+1))/ω^2 * delta_fn[1:nr-1] /(r[1:nr-1]*ρ[1:nr-1])
+	Sh[end] = 0
+    return Sh;
+end
+
+function ℒr!(L12, L21, c′; stencil_gridpts = Dict(6=>3, 42=>5), kw...)
+    # Dirichlet condition β(r_out)=0 on the right edge
+    dbydr!(L12, dr, stencil_gridpts = stencil_gridpts, left_edge_npts = 2, right_edge_npts = 2)
+	L12[1:2] .= 0 # dirichlet boundary condition on G at the inner boundary
+
+    dinds = diagind(L12)
+    @. L12[dinds] += g/c′^2
+
+    # Right edge ghost to use point α(r_out) in computing derivatives
+    # Dirichlet condition α(r_in)=0 on the left edge
+    dbydr!(L21, dr, stencil_gridpts = stencil_gridpts, left_edge_npts = 2, right_edge_npts = 2)
+	L21[end-1:end] .= 0
+
+    dinds = diagind(L21)
+    @. L21[dinds] += 2/r - g/c′^2
+
+	return L12, L21
+end
+
+function wave_operator_diagonal!(Mdiag, Mdiagfixed, ω, ℓ, c′, invρr²; kw...)
+	ωC = ω - im * γ_damping(ω)
+
+	Mdiag .= Mdiagfixed
+
+	for (dind, rind) in zip(1:nr, 1:nr)
+		Mdiag[dind] += -ωC^2 * ρ[rind]
+	end
+	for (dind, rind) in zip(nr+1:2nr, 1:nr)
+		Mdiag[dind] += -ℓ*(ℓ+1) / ωC^2 * invρr²[rind]
+	end
+
+	return Mdiag
+end
+
+function greenfn_components_onemode!(ω, ℓ, αrℓω, βrℓω, αhℓω, βhℓω, M_ωℓ, Mdiagfixed, Mdiag,
+	Sr, Sh, delta_fn, c′, invρr²; kwargs...)
 
 	tangential_source = get(kwargs, :tangential_source, true)
 
 	source!(Sh, ω, ℓ, delta_fn)
 
-	ℒωℓr!(M_ωℓ, ℓωind, ω, ℓ, L14, L22, L33, L41, c′, invρc′², ρN2′, invρr²; kwargs...);
+	wave_operator_diagonal!(Mdiag, Mdiagfixed, ω, ℓ, c′, invρr²; kwargs...);
+	M_ωℓ[diagind(M_ωℓ)] .= Mdiag
 
     M_sparse = sparse(M_ωℓ)
 	M_lu = lu(M_sparse)
@@ -423,85 +374,108 @@ function greenfn_components_onemode!(ℓωind, ω, ℓ, αrℓω, βrℓω, αh�
 end
 
 function greenfn_components_somemodes_serial_oneproc(ℓ_ωind_proc::ProductSplit,
+	r_src, c_scale, ω_arr,
+	tangential_source::Bool = true,
+	tracker::Union{Nothing, RemoteChannel} = nothing,
+	)
+
+	# save real and imaginary parts separately
+	β = 0:1
+	γ = tangential_source ? (0:1) : (0:0)
+	G = zeros(ComplexF64, nr, β, γ, 0:1, length(ℓ_ωind_proc))
+
+	r_src_on_grid = radial_grid_closest(r, r_src)
+	σsrc = σsrc_grid(r_src_on_grid)
+	delta_fn = delta_fn_gaussian_approx(r_src_on_grid, σsrc)
+	Sr, Sh = zeros(2nr), zeros(2nr);
+	@views @. Sr[2:nr] = delta_fn[2:nr];
+
+	αr, βr = zeros(ComplexF64, nr), zeros(ComplexF64, nr);
+	αh, βh = zeros(ComplexF64, nr), zeros(ComplexF64, nr);
+
+	# temporary arrys used to compute the derivative operator
+	M_ωℓ = zeros(ComplexF64, 2nr, 2nr);
+	L12 = zeros(nr, nr);
+	L21 = zero(L12);
+	Mdiagfixed = zeros(2nr); # the terms that do not depend on ω and ℓ
+	Mdiag = zeros(ComplexF64, 2nr); # the terms that do not depend on ω and ℓ
+
+	stencil_gridpts = Dict(6=>3, 42=>5);
+
+	if c_scale != 1
+		c′= c .* c_scale
+		N2′= @. N2 + g^2/c^2 * (1-1/c_scale^2)
+	else
+		c′ = c;
+		N2′ = N2;
+	end
+	invρr² = @. 1 / (ρ * r^2);
+
+	@. Mdiagfixed[1:nr] = ρ * N2′;
+	@. Mdiagfixed[nr+1:end] = 1 / (ρ * c′^2);
+
+	Gωℓ, drGωℓ = zeros(ComplexF64, nr), zeros(ComplexF64, nr)
+
+	ℒr!(L12, L21, c′, stencil_gridpts = stencil_gridpts)
+
+	# top right, ∂ᵣβ, (nr x nr)
+	M_ωℓ[1:nr, nr+1:end] = L12
+
+	# bottom left ∂ᵣα, (nr x nr)
+	M_ωℓ[nr+1:end, 1:nr] = L21
+
+	for (ℓωind, (ℓ, ω_ind)) in enumerate(ℓ_ωind_proc)
+
+		ω = ω_arr[ω_ind]
+
+		greenfn_components_onemode!(ω, ℓ, αr,
+			βr, αh, βh, M_ωℓ, Mdiagfixed, Mdiag, Sr, Sh, delta_fn,
+			c′, invρr²,
+			r_src = r_src, tangential_source = tangential_source,
+			c_scale = c_scale);
+
+		# radial component for radial source
+		@. G[:, 0, 0, 0, ℓωind] = αr
+
+		# tangential component for radial source
+		@. G[:, 1, 0, 0, ℓωind] = Ω(ℓ, 0)/(ρ*r*ω^2) * βr
+
+		if tangential_source
+			# radial component for tangential source
+			@. G[:, 0, 1, 0, ℓωind] = αh/√2
+
+			# tangential component for tangential source
+			@. G[:, 1, 1, 0, ℓωind] = Ω(ℓ, 0)/(ρ*r*ω^2) * (βh - delta_fn)
+		end
+
+		for srcind in UnitRange(axes(G,3)), obsind in UnitRange(axes(G,2))
+			Gωℓ .= @view G[:, obsind, srcind, 0, ℓωind]
+			mul!(drGωℓ, ddr, Gωℓ)
+			G[:, obsind, srcind, 1, ℓωind] = drGωℓ
+		end
+
+		(tracker isa RemoteChannel) && put!(tracker, true)
+	end
+
+	permutedims(reshape(reinterpret_as_float(G), 2, nr, 2, 2, 2, :), [1, 3, 4, 2, 5, 6])
+end
+
+function greenfn_components_somemodes_serial_oneproc_fits(ℓ_ωind_proc::ProductSplit,
 	r_src, c_scale,
 	ω_arr, Gfn_save_directory,
-	tracker::Union{Nothing, RemoteChannel} = nothing;
 	tangential_source::Bool = true,
-    rank = ParallelUtilities.workerrank(ℓ_ωind_proc))
+	tracker::Union{Nothing, RemoteChannel} = nothing
+    )
 
+	rank = ParallelUtilities.workerrank(ℓ_ωind_proc)
 	save_path = joinpath(Gfn_save_directory, @sprintf "Gfn_proc_%03d.fits" rank)
 
 	FITS(save_path, "w") do file
+		GR = greenfn_components_somemodes_serial_oneproc(
+			ℓ_ωind_proc, r_src, c_scale, ω_arr, tangential_source, tracker)
 
-		# save real and imaginary parts separately
-		β = 0:1
-		γ = tangential_source ? (0:1) : (0:0)
-		G = zeros(ComplexF64, nr, β, γ, 0:1, length(ℓ_ωind_proc))
-
-		r_src_on_grid = radial_grid_closest(r, r_src)
-		σsrc = σsrc_grid(r_src_on_grid)
-		delta_fn = delta_fn_gaussian_approx(r_src_on_grid, σsrc)
-        Sr, Sh = zeros(2nr-2), zeros(2nr-2);
-		@views @. Sr[1:nr-2] = delta_fn[2:nr-1]
-
-		αr, βr = zeros(ComplexF64, nr), zeros(ComplexF64, nr);
-		αh, βh = zeros(ComplexF64, nr), zeros(ComplexF64, nr);
-
-        # temporary arrys used to compute the derivative operator
-        M_ωℓ = zeros(ComplexF64, 2(nr-1), 2(nr-1));
-        L14 = zeros(nr-2, nr-1);
-        L41 = zero(L14);
-        L22 = zeros(3);
-        L33 = zeros(3);
-
-        stencil_gridpts = Dict(6=>3, 42=>5);
-
-		if c_scale != 1
-			c′= c .* c_scale
-			N2′= @. N2 + g^2/c^2 * (1-1/c_scale^2)
-		else
-			c′ = c;
-			N2′ = N2;
-		end
-		invρc′² = @. 1 / (ρ * c′^2);
-		ρN2′ = ρ .* N2′;
-		invρr² = @. 1 / (ρ * r^2)
-
-		for (ℓωind, (ℓ, ω_ind)) in enumerate(ℓ_ωind_proc)
-
-			ω = ω_arr[ω_ind]
-
-			greenfn_components_onemode!(ℓωind, ω, ℓ, αr,
-				βr, αh, βh, M_ωℓ, L14, L22, L33, L41, Sr, Sh, delta_fn,
-				c′, invρc′², ρN2′, invρr²,
-                stencil_gridpts = stencil_gridpts,
-				r_src = r_src, tangential_source = tangential_source,
-				c_scale = c_scale);
-
-			# radial component for radial source
-			G[:, 0, 0, 0, ℓωind] .= αr
-            mul!((@view G[:, 0, 0, 1, ℓωind]), ddr, αr)
-
-			# tangential component for radial source
-			@. G[:, 1, 0, 0, ℓωind] = Ω(ℓ, 0)/(ρ*r*ω^2) * βr
-            mul!((@view G[:, 1, 0, 1, ℓωind]), ddr, (@view G[:, 1, 0, 0, ℓωind]))
-
-			if tangential_source
-				# radial component for tangential source
-				@. G[:, 0, 1, 0, ℓωind] = αh/√2
-                mul!((@view G[:, 0, 1, 1, ℓωind]), ddr, (@view G[:, 0, 1, 0, ℓωind]))
-
-				# tangential component for tangential source
-				@. G[:, 1, 1, 0, ℓωind] = Ω(ℓ, 0)/(ρ*r*ω^2) * (βh - delta_fn)
-                mul!((@view G[:, 1, 1, 1, ℓωind]), ddr, (@view G[:, 1, 1, 0, ℓωind]))
-			end
-
-			(tracker isa RemoteChannel) && put!(tracker, true)
-		end
-
-		write(file, reinterpret_as_float(G))
-
-	end # close file
+		write(file, GR)
+	end
 
 	nothing
 end
@@ -531,8 +505,8 @@ function greenfn_components(r_src = r_src_default; kwargs...)
 	tracker = RemoteChannel(() -> Channel{Bool}(num_tasks + 1))
 	prog_bar = Progress(num_tasks, 2, "Green functions computed : ")
 
-	wrapper(x) = greenfn_components_somemodes_serial_oneproc(x, r_src, c_scale, ω_arr,
-	Gfn_save_directory, tracker; tangential_source = tangential_source)
+	wrapper(x) = greenfn_components_somemodes_serial_oneproc_fits(x, r_src, c_scale, ω_arr,
+	Gfn_save_directory, tangential_source, tracker)
 
 	@sync begin
 	 	@async begin
@@ -551,50 +525,55 @@ function greenfn_components(r_src = r_src_default; kwargs...)
 	nothing # to suppress the task done message
 end
 
-function Gfn_reciprocity(; kwargs...)
-	r_src = get(kwargs, :r_src, r_src_default)
-	r_src_ind = radial_grid_index(r, r_src)
-	r_obs = get(kwargs, :r_obs, r_obs_default)
-	r_obs_ind = radial_grid_index(r, r_obs)
+function Gfn_reciprocity_partial(localtimer, ℓ_ωind_iter_on_proc, r_src, r_obs)
+	ℓ_arr, ν_arr = ParallelUtilities.getiterators(ℓ_ωind_iter_on_proc)
+	Nν_Gfn = length(ν_arr)
 
+	r_src_ind = radial_grid_index(r, r_src)
+	r_obs_ind = radial_grid_index(r, r_obs)
 	Gfn_path_src = Gfn_path_from_source_radius(r_src)
 	Gfn_path_obs = Gfn_path_from_source_radius(r_obs)
+	num_procs_src = get_numprocs(Gfn_path_src)
+	num_procs_obs = get_numprocs(Gfn_path_obs)
+
+	G_reciprocity = zeros(2, ℓ_arr, ν_arr)
+
+	Gfn_fits_files_src, Gfn_fits_files_obs =
+		Gfn_fits_files.((Gfn_path_src, Gfn_path_obs), ((ℓ_arr, 1:Nν_Gfn),),
+			(ℓ_ωind_iter_on_proc,), (num_procs_src, num_procs_obs))
+
+	G01 = zeros(ComplexF64)
+	G10 = zeros(ComplexF64)
+
+	for (ℓ, ω_ind) in ℓ_ωind_iter_on_proc
+
+		read_Gfn_file_at_index!(G10,
+			Gfn_fits_files_src, (ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), num_procs_src,
+			2, 1, r_obs_ind, 1)
+
+		read_Gfn_file_at_index!(G01,
+			Gfn_fits_files_obs, (ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), num_procs_obs,
+			1, 2, r_src_ind, 1)
+
+		G_reciprocity[1, ℓ, ω_ind] = abs(G10[])
+		G_reciprocity[2, ℓ, ω_ind] = abs(G01[])
+	end
+
+	return parent(G_reciprocity)
+end
+
+function Gfn_reciprocity(comm; kwargs...)
+	r_src = get(kwargs, :r_src, r_src_default)
+	r_obs = get(kwargs, :r_obs, r_obs_default)
+	Gfn_path_src = Gfn_path_from_source_radius(r_src)
 	@load(joinpath(Gfn_path_src,"parameters.jld2"),
 		ν_arr, Nν_Gfn, ℓ_arr, num_procs)
 
-	num_procs_obs = get_numprocs(Gfn_path_obs)
-
 	ℓ_range = get(kwargs, :ℓ_range, ℓ_arr)
 	ν_ind_range = get(kwargs, :ν_ind_range, 1:Nν_Gfn)
-	modes_iter = Iterators.product(ℓ_range, ν_ind_range)
 
-	function summodes(ℓ_ωind_iter_on_proc)
-		G_reciprocity = zeros(2, ℓ_range, ν_ind_range)
-
-		Gfn_fits_files_src, Gfn_fits_files_obs =
-		Gfn_fits_files.((Gfn_path_src, Gfn_path_obs), ((ℓ_arr, 1:Nν_Gfn),),
-			(ℓ_ωind_iter_on_proc,),(num_procs, num_procs_obs))
-
-		for (ℓ, ω_ind) in ℓ_ωind_iter_on_proc
-
-			G10_obs_src = read_Gfn_file_at_index(
-				Gfn_fits_files_src, ℓ_arr, 1:Nν_Gfn,(ℓ, ω_ind), num_procs,
-				r_obs_ind, 2, 1, 1)
-
-			G01_src_obs = read_Gfn_file_at_index(
-				Gfn_fits_files_obs, ℓ_arr, 1:Nν_Gfn,(ℓ, ω_ind), num_procs_obs,
-				r_src_ind, 1, 2, 1)
-
-			G_reciprocity[1, ℓ, ω_ind] = abs(G10_obs_src)
-			G_reciprocity[2, ℓ, ω_ind] = abs(G01_src_obs)
-
-		end
-
-		return G_reciprocity
-	end
-
-	G_reciprocity = @fetchfrom workers()[1] permutedims(
-					pmapsum(summodes, modes_iter), [3, 2, 1])
+	G_reciprocity = pmapsum(comm, Gfn_reciprocity_partial, (ℓ_range, ν_ind_range), r_src, r_obs)
+	permutedims(G_reciprocity, [3,2,1])
 end
 
 #################################################################################
@@ -941,17 +920,4 @@ function Hγₗⱼₒⱼₛω_α₁α₂_firstborn!(H::StructArray{<:Complex, 4}
 		end
 	end
 	return H
-end
-
-function permuteGfn(path)
-	newdir = joinpath(path, "..", path*"_flipped")
-	isdir(newdir) || mkdir(newdir)
-	files =	filter(x -> endswith(x, ".fits"), readdir(path))
-	@showprogress 1 for filename in files
-		_data = FITSIO.fitsread(joinpath(path, filename))::Array{Float64,5}
-		data = reshape(_data, 2, nr, 2, 2, 2, :)
-		data2 = permutedims(data, [1, 3, 4, 2, 5, 6])
-		FITSIO.fitswrite(joinpath(newdir, filename), data2)
-	end
-	cp(joinpath(path, "parameters.jld2"), joinpath(newdir, "parameters.jld2"), force = true)
 end
