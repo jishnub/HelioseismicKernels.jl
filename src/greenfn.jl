@@ -169,9 +169,11 @@ end
 const Rsun, nr, r, dr, ddr, c, ρ, g, N2, γ_damping = load_solar_model()
 
 radial_grid_index(x::Point3D) = radial_grid_index(x.r)
+radial_grid_index(::Point2D) = radial_grid_index(r_obs_default)
 radial_grid_index(r_pt::Real) = radial_grid_index(r, r_pt)
 radial_grid_index(r, r_pt::Real) = searchsortedfirst(r, r_pt)
 radial_grid_closest(x::Point3D) = radial_grid_closest(x.r)
+radial_grid_closest(::Point2D) = radial_grid_closest(r_obs_default)
 radial_grid_closest(r_pt::Real) = radial_grid_closest(r, r_pt)
 radial_grid_closest(r, r_pt::Real) = r[radial_grid_index(r, r_pt)]
 

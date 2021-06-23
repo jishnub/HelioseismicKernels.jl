@@ -31,18 +31,18 @@ end
 #######################################################################################################
 
 function pad_zeros_ν(arr::Array, ν_ind_range, Nν_Gfn, ν_start_zeros, ν_end_zeros, dim::Integer = 1)
- 	ax_leading  = axes(arr)[1:dim-1]
-	ax_trailing = axes(arr)[dim+1:end]
+ 	ax_leading  = size(arr)[1:dim-1]
+	ax_trailing = size(arr)[dim+1:end]
 	N_leading_zeros_ν = ν_start_zeros + first(ν_ind_range) - 1
 	N_trailing_zeros_ν = Nν_Gfn - last(ν_ind_range) + ν_end_zeros
 
-	inds_leading = (Tuple(ax_leading)..., oftype(axes(arr,1), 1:N_leading_zeros_ν), Tuple(ax_trailing)...)
-	inds_trailing = (Tuple(ax_leading)..., oftype(axes(arr,1), 1:N_trailing_zeros_ν) , Tuple(ax_trailing)...)
+	inds_leading = (ax_leading..., N_leading_zeros_ν, ax_trailing...) :: NTuple{ndims(arr),Int}
+	inds_trailing = (ax_leading..., N_trailing_zeros_ν , ax_trailing...) :: NTuple{ndims(arr),Int}
 
 	lead_arr = zeros(eltype(arr), inds_leading)
 	trail_arr = zeros(eltype(arr), inds_trailing)
 
-	cat(lead_arr, arr, trail_arr, dims = dim)
+	cat(lead_arr, arr, trail_arr, dims = dim) :: typeof(arr)
 end
 
 # If an OffsetArray is passed we may infer the frequency range from its axes
@@ -86,6 +86,8 @@ function read_parameters_for_points(::Point2D, ::Vector{<:Point2D}; kwargs...)
 	return p_Gsrc, p_Gobs, p_Gobs
 end
 
+_extremaelementrange(ℓ_ωind_iter_on_proc) = UnitRange(extremaelement(ℓ_ωind_iter_on_proc, dims = 1)...)
+
 ########################################################################################
 # Bipolar harmonics
 ########################################################################################
@@ -99,7 +101,7 @@ end
 
 function computeY₀₀(::los_earth, xobs1::SphericalPoint, xobs2::SphericalPoint, ℓ_range::AbstractRange{<:Integer})
 	B = BipolarSphericalHarmonics.monopolarharmonics(GSH(), Point2D(xobs1)..., Point2D(xobs2)..., maximum(ℓ_range))
-	v = [biposh(B, Point2D(xobs1)..., Point2D(xobs2)..., 0, 0, ℓ, ℓ) for ℓ in ℓ_range]
+	v = BipolarSphericalHarmonics.eltypeY(B)[biposh(B, Point2D(xobs1)..., Point2D(xobs2)..., 0, 0, ℓ, ℓ) for ℓ in ℓ_range]
 	norm(ℓ) = (-1)^ℓ * √(2ℓ+1)
 	@. v *= norm(ℓ_range)
 	OffsetArray(v, ℓ_range)
@@ -114,13 +116,12 @@ end
 
 function computeY₁₀(::los_earth, xobs1::SphericalPoint, xobs2::SphericalPoint, ℓ_range::AbstractRange{<:Integer})
 	B = BipolarSphericalHarmonics.monopolarharmonics(GSH(), Point2D(xobs1)..., Point2D(xobs2)..., maximum(ℓ_range))
-	v = [biposh(B, Point2D(xobs1)..., Point2D(xobs2)..., 1, 0, ℓ, ℓ) for ℓ in ℓ_range]
+	v = BipolarSphericalHarmonics.eltypeY(B)[biposh(B, Point2D(xobs1)..., Point2D(xobs2)..., 1, 0, ℓ, ℓ) for ℓ in ℓ_range]
 	norm(ℓ) = (-1)^ℓ * √(2ℓ+1)
 	@. v *= norm(ℓ_range)
 	OffsetArray(v, ℓ_range)
 end
 
-los_projected_biposh(::los_radial, Y1, l1, l2) = Y1
 function _multiplylos!(Y12, j1j2ind, Y12_j1j2::AbstractVector, l1l2::AbstractVector)
 	for (lmind, Y12_j1j2_lm) in pairs(Y12_j1j2)
 		Y12_j1j2[lmind] = Y12_j1j2_lm .* l1l2
@@ -131,13 +132,18 @@ function _multiplylos!(Y12, j1j2ind, Y12_j1j2::StaticVector, l1l2::AbstractVecto
 	Y12[j1j2ind] = Y12_j1j2 .* l1l2
 	nothing
 end
-function los_projected_biposh(::los_earth, Y12, l1, l2)
-	l1l2 = LinearAlgebra.kron(parent(l1), parent(l2))
+los_projected_biposh(::los_radial, Y1, l1l2) = Y1
+los_projected_biposh(::los_earth, Y12::AbstractVector{<:Number}, l1l2) = Y12 .* l1l2
+function los_projected_biposh(::los_earth, Y12, l1l2)
 	for (j1j2ind, Y12_j1j2) in pairs(Y12)
 		Y12_j1j2 === nothing && continue
 		_multiplylos!(Y12, j1j2ind, Y12_j1j2, l1l2)
 	end
 	return Y12
+end
+function los_projected_biposh(los, Y12, l1, l2)
+	l1l2 = LinearAlgebra.kron(parent(l1), parent(l2))
+	los_projected_biposh(los, Y12, l1l2)
 end
 
 _biposh_returntype(v::AbstractArray) =  _biposh_returntype(typeof(v))
@@ -147,8 +153,7 @@ _biposh_returntype(::Type{Union{Nothing, T}}) where {T} = Union{Nothing, _biposh
 _biposh_returntype(::Type{T}) where {T<:Number} = T
 _biposh_returntype(::Type{SVector{9,T}}) where {T<:Number} = OffsetMatrix{T,SMatrix{2,2,T,4}}
 
-biposh_spheroidal(Y::OffsetVector) =
-	OffsetArray(biposh_spheroidal(parent(Y)), axes(Y))
+biposh_spheroidal(Y::OffsetVector) = OffsetArray(biposh_spheroidal(parent(Y)), axes(Y))
 function biposh_spheroidal(Y::SHVector)
 	SHArray(biposh_spheroidal(parent(Y)), SphericalHarmonicArrays.modes(Y))
 end
@@ -165,9 +170,24 @@ function biposh_spheroidal(Y::SVector{9,<:Number})
 end
 
 function los_projected_biposh_spheroidal(computeY, xobs1, xobs2::SphericalPoint, los, ℓ_range::AbstractUnitRange)
-	_Y12 = computeY(los, xobs1, xobs2, ℓ_range)
+	Y12 = computeY(los, xobs1, xobs2, ℓ_range)
+	los_projected_biposh_spheroidal(Y12, xobs1, xobs2, los)
+end
+function los_projected_biposh_spheroidal(Y12, xobs1, xobs2::SphericalPoint, los)
 	l1, l2 = line_of_sight_covariant.((xobs1, xobs2), los)
-	biposh_spheroidal(los_projected_biposh(los, _Y12, l1, l2))
+	l1l2Y12 = los_projected_biposh(los, deepcopy(Y12), l1, l2)
+	biposh_spheroidal(l1l2Y12)
+end
+function los_projected_biposh_spheroidal_Y₀₀(xobs1::SphericalPoint, xobs2::SphericalPoint, xobs1′::SphericalPoint, xobs2′::SphericalPoint, los::los_direction, ℓ_range)
+	Y12 = computeY₀₀(los, xobs1, xobs2, ℓ_range)
+	los_projected_biposh_spheroidal_Y₀₀(Y12, xobs1, xobs2, xobs1′, xobs2′, los)
+end
+function los_projected_biposh_spheroidal_Y₀₀(Y12, xobs1::SphericalPoint, xobs2::SphericalPoint, xobs1′::SphericalPoint, xobs2′::SphericalPoint, los::los_direction)
+	l1, l2 = line_of_sight_covariant.((xobs1′, xobs2′), los)
+	M′ = rotation_points(HelicityCovariant(), xobs1, xobs2, xobs1′, xobs2′)
+	l1l2 = M′ * LinearAlgebra.kron(l1, l2)
+	l1l2Y12 = los_projected_biposh(los, deepcopy(Y12), l1l2)
+	biposh_spheroidal(l1l2Y12)
 end
 function los_projected_biposh_spheroidal(computeY, nobs1, nobs2_arr::Vector{<:SphericalPoint}, los, ℓ_range::AbstractUnitRange)
 	l1 = line_of_sight_covariant(nobs1, los)
@@ -178,7 +198,7 @@ function los_projected_biposh_spheroidal(computeY, nobs1, nobs2_arr::Vector{<:Sp
 end
 
 function los_projected_biposh_spheroidal(computeY, xobs1, xobs2, los, ℓ_ωind_iter_on_proc::ProductSplit)
-	ℓ_range = UnitRange(extremaelement(ℓ_ωind_iter_on_proc, dims = 1)...)
+	ℓ_range = _extremaelementrange(ℓ_ωind_iter_on_proc)
 	los_projected_biposh_spheroidal(computeY, xobs1, xobs2, los, ℓ_range)
 end
 
@@ -206,6 +226,20 @@ function C_FITS_header(n1::Point2D, n2::Point2D)
 	xobs1 = Point3D(r_obs_default, n1)
 	xobs2 = Point3D(r_obs_default, n2)
 	C_FITS_header(xobs1, xobs2)
+end
+function C_FITS_header((n1, n1′), (n2, n2′))
+	xobs1 = Point3D(r_obs_default, n1)
+	xobs2 = Point3D(r_obs_default, n2)
+	f = C_FITS_header(xobs1, xobs2)
+	for (k, v, c) in zip(["X1PTHETA", "X1PPHI", "X2PTHETA", "X2PPHI"], [n1′..., n2′...],
+		["Co-latitude of the first observation point rotated",
+		"Azimuth of the first observation point rotated",
+		"Co-latitude of the second observation point rotated",
+		"Azimuth of the second observation point rotated"
+		])
+		f[k] = v
+		set_comment!(f, k, c)
+	end
 end
 
 function C_FITS_header(n1::Point2D, n2::Vector{<:Point2D})
@@ -245,9 +279,10 @@ function Cωℓ(::los_earth, ω, ℓ, α_r₁::AbstractVector{<:Complex}, α_r�
 	s
 end
 
-function Cω_partial(localtimer, ℓ_ωind_iter_on_proc, xobs1::Point3D, xobs2::Point3D, los::los_direction,
+function Cω_partial(localtimer, ℓ_ωind_iter_on_proc,
+	xobs1::SphericalPoint, xobs2::SphericalPoint, los::los_direction,
 	p_Gsrc::Union{Nothing, ParamsGfn} = nothing,
-	r_src = r_src_default, r_obs = nothing, c_scale = 1)
+	r_src = r_src_default, c_scale = 1)
 
 	p_Gsrc = read_all_parameters(p_Gsrc, r_src = r_src, c_scale = c_scale)
 	Gfn_path_src, NGfn_files_src = p_Gsrc.path, p_Gsrc.num_procs
@@ -288,11 +323,58 @@ function Cω_partial(localtimer, ℓ_ωind_iter_on_proc, xobs1::Point3D, xobs2::
 	closeGfnfits(Gfn_fits_files_src)
 	parent(Cω_proc)
 end
+function Cω_partial(localtimer, ℓ_ωind_iter_on_proc,
+	(xobs1, xobs1′)::NTuple{2,SphericalPoint},
+	(xobs2, xobs2′)::NTuple{2,SphericalPoint}, los::los_direction,
+	p_Gsrc::Union{Nothing, ParamsGfn} = nothing,
+	r_src = r_src_default, c_scale = 1)
+
+	p_Gsrc = read_all_parameters(p_Gsrc, r_src = r_src, c_scale = c_scale)
+	Gfn_path_src, NGfn_files_src = p_Gsrc.path, p_Gsrc.num_procs
+	@unpack ℓ_arr, ω_arr, Nν_Gfn = p_Gsrc
+
+	Gfn_fits_files_src = Gfn_fits_files(Gfn_path_src, (ℓ_arr, 1:Nν_Gfn),
+		ℓ_ωind_iter_on_proc, NGfn_files_src)
+
+	ν_ind_range = ParallelUtilities.getiterators(ℓ_ωind_iter_on_proc)[end]
+
+	Cω_proc = zeros(ComplexF64, 2, ν_ind_range)
+
+	ℓ_range = _extremaelementrange(ℓ_ωind_iter_on_proc)
+	Y12_Helicity = computeY₀₀(los, xobs1, xobs2, ℓ_range)
+	Y12 = los_projected_biposh_spheroidal(Y12_Helicity, xobs1, xobs2, los)
+	Y1′2′ = los_projected_biposh_spheroidal_Y₀₀(Y12_Helicity, xobs1, xobs2, xobs1′, xobs2′, los)
+
+	r₁_ind, r₂_ind = radial_grid_index.((xobs1, xobs2))
+
+	@unpack α_r₁, α_r₂ = allocateGfn(los, r₁_ind == r₂_ind)
+
+	for (ℓ, ω_ind) in ℓ_ωind_iter_on_proc
+		ω = ω_arr[ω_ind]
+
+		@timeit localtimer "FITS" begin
+			read_Gfn_file_at_index!(α_r₁, Gfn_fits_files_src,
+			(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, obsindFITS(los), 1, r₁_ind, 1)
+
+			if r₁_ind != r₂_ind
+				read_Gfn_file_at_index!(α_r₂, Gfn_fits_files_src,
+				(ℓ_arr, 1:Nν_Gfn), (ℓ, ω_ind), NGfn_files_src, obsindFITS(los), 1, r₂_ind, 1)
+			end
+		end
+
+		@timeit localtimer "Cω calculation" begin
+			Cω_proc[1,ω_ind] += Cωℓ(los, ω, ℓ, α_r₁, α_r₂, Y12[ℓ])
+			Cω_proc[2,ω_ind] += Cωℓ(los, ω, ℓ, α_r₁, α_r₂, Y1′2′[ℓ])
+		end
+	end
+	closeGfnfits(Gfn_fits_files_src)
+	parent(permutedims(Cω_proc))
+end
 
 function Cω_partial(localtimer, ℓ_ωind_iter_on_proc,
 	nobs1::Point2D, nobs2_arr::Vector{<:Point2D}, los::los_direction,
 	p_Gsrc::Union{Nothing, ParamsGfn} = nothing,
-	r_src = r_src_default, r_obs = r_obs_default, c_scale = 1)
+	r_src = r_src_default, c_scale = 1)
 
 	p_Gsrc = read_all_parameters(p_Gsrc, r_src = r_src, c_scale = c_scale)
 
@@ -301,7 +383,7 @@ function Cω_partial(localtimer, ℓ_ωind_iter_on_proc,
 
 	ν_ind_range = ParallelUtilities.getiterators(ℓ_ωind_iter_on_proc)[end]
 
-	r₁_ind = radial_grid_index(r_obs)
+	r₁_ind = radial_grid_index(nobs1)
 
 	Gfn_fits_files_src = Gfn_fits_files(Gfn_path_src,
 		(ℓ_arr, 1:Nν_Gfn), ℓ_ωind_iter_on_proc, NGfn_files_src)
@@ -331,9 +413,9 @@ end
 ########################################################################################################
 
 function ∂ϕ₂Cω_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit,
-	xobs1::Point3D, xobs2::Point3D, los::los_radial,
+	xobs1::SphericalPoint, xobs2::SphericalPoint, los::los_radial,
 	p_Gsrc::Union{Nothing, ParamsGfn} = nothing,
-	r_src = r_src_default, r_obs = nothing, c_scale = 1)
+	r_src = r_src_default, c_scale = 1)
 
 	p_Gsrc = read_all_parameters(p_Gsrc, r_src = r_src, c_scale = c_scale)
 	Gfn_path_src, NGfn_files_src = p_Gsrc.path, p_Gsrc.num_procs
@@ -373,7 +455,7 @@ end
 function ∂ϕ₂Cω_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit,
 	nobs1::Point2D, nobs2_arr::Vector{<:Point2D}, los::los_radial,
 	p_Gsrc::Union{Nothing, ParamsGfn} = nothing,
-	r_src = r_src_default, r_obs = nothing, c_scale = 1)
+	r_src = r_src_default, c_scale = 1)
 
 	p_Gsrc = read_all_parameters(p_Gsrc, r_src = r_src, c_scale = c_scale)
 	Gfn_path_src, NGfn_files_src = p_Gsrc.path, p_Gsrc.num_procs
@@ -388,7 +470,7 @@ function ∂ϕ₂Cω_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit,
 
 	Y12 = los_projected_biposh_spheroidal(computeY₁₀, nobs1, nobs2_arr, los, ℓ_ωind_iter_on_proc)
 
-	r_obs_ind = radial_grid_index(r_obs)
+	r_obs_ind = radial_grid_index(nobs1)
 
 	@unpack α_r₁, α_r₂ = allocateGfn(los, true)
 
@@ -408,9 +490,9 @@ function ∂ϕ₂Cω_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit,
 end
 
 function Cω_∂ϕ₂Cω_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit,
-	xobs1::Point3D, xobs2::Point3D, los::los_radial,
+	xobs1::SphericalPoint, xobs2::SphericalPoint, los::los_radial,
 	p_Gsrc::Union{Nothing, ParamsGfn} = nothing,
-	r_src = r_src_default, r_obs = nothing, c_scale = 1)
+	r_src = r_src_default, c_scale = 1)
 
 	p_Gsrc = read_all_parameters(p_Gsrc, r_src = r_src, c_scale = c_scale)
 
@@ -454,7 +536,7 @@ end
 function Cω_∂ϕ₂Cω_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit,
 	nobs1::Point2D, nobs2_arr::Vector{<:Point2D}, los::los_radial,
 	p_Gsrc::Union{Nothing, ParamsGfn} = nothing,
-	r_src = r_src_default, r_obs = r_obs_default, c_scale = 1)
+	r_src = r_src_default, c_scale = 1)
 
 	p_Gsrc = read_all_parameters(p_Gsrc, r_src = r_src, c_scale = c_scale)
 	Gfn_path_src, NGfn_files_src = p_Gsrc.path, p_Gsrc.num_procs
@@ -467,7 +549,7 @@ function Cω_∂ϕ₂Cω_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSpli
 
 	Cω_proc = zeros(ComplexF64, 0:1, length(nobs2_arr), ν_ind_range)
 
-	r_obs_ind = radial_grid_index(r_obs)
+	r_obs_ind = radial_grid_index(nobs1)
 
 	lmax = maximum(ℓ_arr)
 
@@ -506,25 +588,29 @@ for f in (:Cω, :∂ϕ₂Cω, :Cω_∂ϕ₂Cω)
 	f_feeder = Symbol(f, "_feeder")
 	f_partial = Symbol(f, "_partial")
 	@eval function $f_feeder(comm, args...; kwargs...)
-		r_src, r_obs, c_scale = read_rsrc_robs_c_scale(kwargs)
+		r_src, _, c_scale = read_rsrc_robs_c_scale(kwargs)
 		p_Gsrc = read_all_parameters(r_src = r_src, c_scale = c_scale)
 		@unpack Nν_Gfn, ν_arr, ℓ_arr, ν_start_zeros, ν_end_zeros = p_Gsrc
 		iters = ℓ_and_ν_range(ℓ_arr, ν_arr; kwargs...)
 
-		C = pmapsum(comm, $f_partial, iters, args..., p_Gsrc, r_src, r_obs, c_scale)
+		C = pmapsum(comm, $f_partial, iters, args..., p_Gsrc, r_src, c_scale)
 		C === nothing && return nothing
 		ν_ind_range = last(iters)
 		return pad_zeros_ν(C, ν_ind_range, Nν_Gfn, ν_start_zeros, ν_end_zeros)
 	end
 	# With or without los, 3D points
-	@eval function $f(comm, xobs1::Point3D, xobs2::Point3D, los::los_direction = los_radial(); kwargs...)
+	@eval function $f(comm, xobs1, xobs2, los::los_direction = los_radial(); kwargs...)
 		C = $f_feeder(comm, xobs1, xobs2, los; kwargs...)
 		C === nothing && return nothing
 
 		lostag = los isa los_radial ? "" : "_los"
 		filename = $f_str * lostag * ".fits"
 
-		save_to_fits_and_return(filename, C, header = C_FITS_header(xobs1, xobs2))
+		if get(kwargs, :save, false)
+			filepath = joinpath(SCRATCH_kerneldir[], filename)
+			FITSIO.fitswrite(filepath, C, header = C_FITS_header(xobs1, xobs2))
+		end
+		return C
 	end
 	# Multiple 2D points
 	@eval function $f(comm, nobs1::Point2D, nobs2_arr::Vector{<:Point2D},
@@ -534,8 +620,6 @@ for f in (:Cω, :∂ϕ₂Cω, :Cω_∂ϕ₂Cω)
 		C === nothing && return nothing
 		save_to_fits_and_return($f_str * "_n2arr.fits", C, header = C_FITS_header(nobs1, nobs2_arr))
 	end
-	# With or without los, 2D points
-	@eval @two_points_on_the_surface $f
 end
 
 ########################################################################################################

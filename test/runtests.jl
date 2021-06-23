@@ -1,7 +1,9 @@
 using Test
 using SphericalHarmonicModes
 
-n1, n2 = HelioseismicKernels.Point2D(π/3, π/4), HelioseismicKernels.Point2D(2π/3, π/3);
+# n1, n2 = HelioseismicKernels.Point2D(π/3, π/4), HelioseismicKernels.Point2D(2π/3, π/3);
+n1, n2 = HelioseismicKernels.Point2D(0, 0), HelioseismicKernels.Point2D(pi/4, 0);
+n1′, n2′ = HelioseismicKernels.Point2D(pi/2, 0), HelioseismicKernels.Point2D(pi/2, pi/4);
 r_src = HelioseismicKernels.r_src_default;
 r_obs = HelioseismicKernels.r_obs_default;
 xsrc1 = HelioseismicKernels.Point3D(r_src, n1);
@@ -10,6 +12,18 @@ xobs1 = HelioseismicKernels.Point3D(r_obs, n1);
 xobs2 = HelioseismicKernels.Point3D(r_obs, n2);
 
 @testset "all tests" begin
+	@testset "rotation of Y₀₀" begin
+		Y1′2′ = HelioseismicKernels.los_projected_biposh_spheroidal(HelioseismicKernels.computeY₀₀, n1′, n2′, HelioseismicKernels.los_earth(), 1:10)
+		Y1′2′_12 = HelioseismicKernels.los_projected_biposh_spheroidal_Y₀₀(n1, n2, n1′, n2′, HelioseismicKernels.los_earth(), 1:10)
+		@test Y1′2′ ≈  Y1′2′_12
+	end
+	@testset "rotated cross covariances" begin
+		C = HelioseismicKernels.Cω(nothing, (n1, n1′), (n2, n2′), HelioseismicKernels.los_earth());
+		C1 = HelioseismicKernels.Cω(nothing, n1, n2, HelioseismicKernels.los_earth());
+		C2 = HelioseismicKernels.Cω(nothing, n1′, n2′, HelioseismicKernels.los_earth());
+		@test C[:,1] ≈ C1
+		@test C[:,2] ≈ C2
+	end
 	@testset "kernel components" begin
 		@testset "SoundSpeed" begin
 			function uniformvalidation(::HelioseismicKernels.SoundSpeed, m::HelioseismicKernels.SeismicMeasurement, xobs1, xobs2,

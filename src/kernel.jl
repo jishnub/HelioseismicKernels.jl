@@ -34,7 +34,8 @@ function getkernelmodes(; kwargs...)
 	t_min = get(kwargs, :t_min, 0) :: Int
 	t_max = get(kwargs, :t_max, t_min) :: Int
 
-	get(kwargs, :SHModes, LM(s_min:s_max, t_min:t_max)) :: LM{UnitRange{Int}, UnitRange{Int}}
+	m = get(kwargs, :SHModes, LM(s_min:s_max, t_min:t_max))
+	LM{UnitRange{Int}, UnitRange{Int}}(m)
 end
 
 function unpackGfnparams(p_Gsrc, r_src, p_Gobs1, r_obs1, p_Gobs2, r_obs2)
@@ -52,10 +53,10 @@ function unpackGfnparams(p_Gsrc, r_src, p_Gobs1, r_obs1, p_Gobs2, r_obs2)
 		p_Gsrc, p_Gobs1, p_Gobs2)
 end
 
-function _biposh_flippoints(los::los_radial, xobs1, xobs2, SHModes, jₒjₛ_allmodes)
+function _biposh_flippoints(::los_radial, xobs1, xobs2, SHModes, jₒjₛ_allmodes)
 	biposh_flippoints(SH(), Point2D(xobs1)..., Point2D(xobs2)..., SHModes, jₒjₛ_allmodes)
 end
-function _biposh_flippoints(los::los_earth, xobs1, xobs2, SHModes, jₒjₛ_allmodes)
+function _biposh_flippoints(::los_earth, xobs1, xobs2, SHModes, jₒjₛ_allmodes)
 	biposh_flippoints(GSH(), Point2D(xobs1)..., Point2D(xobs2)..., SHModes, jₒjₛ_allmodes)
 end
 function los_projected_spheroidal_biposh_flippoints(xobs1, xobs2, los, SHModes, jₒjₛ_allmodes)
@@ -188,7 +189,7 @@ function kernel_ℑu⁺₁₀_partial(localtimer, ℓ_ωind_iter_on_proc::Produc
 			Y12[j], conjhω, H¹₁jj_r₁r₂, H¹₁jj_r₂r₁, dω)
 	end
 
-	map(closeGfnfits, (Gfn_fits_files_src, Gfn_fits_files_obs1, Gfn_fits_files_obs2))
+	foreach(closeGfnfits, (Gfn_fits_files_src, Gfn_fits_files_obs1, Gfn_fits_files_obs2))
 	return @. (ρ/r)*K
 end
 
