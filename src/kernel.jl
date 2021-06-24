@@ -1,28 +1,8 @@
 l_min(SHModes::SphericalHarmonicModes.SHModeRange) = minimum(l_range(SHModes))
 l_max(SHModes::SphericalHarmonicModes.SHModeRange) = maximum(l_range(SHModes))
-l_minmax(SHModes::SphericalHarmonicModes.SHModeRange) = (l_min(SHModes), l_max(SHModes))
 
 m_min(SHModes::SphericalHarmonicModes.SHModeRange) = minimum(m_range(SHModes))
 m_max(SHModes::SphericalHarmonicModes.SHModeRange) = maximum(m_range(SHModes))
-m_minmax(SHModes::SphericalHarmonicModes.SHModeRange) = (m_min(SHModes), m_max(SHModes))
-
-########################################################################################
-# Macro to call appropriate 3D method given a 2D one
-########################################################################################
-
-macro two_points_on_the_surface2(fn)
-	callermodule = __module__
-	quote
-		function $(esc(fn))(comm, m::SeismicMeasurement, nobs1::Point2D, nobs2::Point2D,
-			los::los_direction = los_radial(); kwargs...)
-
-			r_obs = get(kwargs, :r_obs, r_obs_default)
-			xobs1 = Point3D(r_obs, nobs1)
-			xobs2 = Point3D(r_obs, nobs2)
-			$callermodule.$fn(comm, m, xobs1, xobs2, los; kwargs...)
-		end
-	end
-end
 
 ########################################################################################
 # Utility function
@@ -53,18 +33,73 @@ function unpackGfnparams(p_Gsrc, r_src, p_Gobs1, r_obs1, p_Gobs2, r_obs2)
 		p_Gsrc, p_Gobs1, p_Gobs2)
 end
 
-function _biposh_flippoints(::los_radial, xobs1, xobs2, SHModes, jₒjₛ_allmodes)
-	biposh_flippoints(SH(), Point2D(xobs1)..., Point2D(xobs2)..., SHModes, jₒjₛ_allmodes)
-end
-function _biposh_flippoints(::los_earth, xobs1, xobs2, SHModes, jₒjₛ_allmodes)
-	biposh_flippoints(GSH(), Point2D(xobs1)..., Point2D(xobs2)..., SHModes, jₒjₛ_allmodes)
-end
-function los_projected_spheroidal_biposh_flippoints(xobs1, xobs2, los, SHModes, jₒjₛ_allmodes)
+VSHType(::los_radial) = SH()
+VSHType(::los_earth) = GSH()
+
+function los_projected_spheroidal_biposh_flippoints(xobs1::SphericalPoint, xobs2::SphericalPoint, los, SHModes, jₒjₛ_allmodes)
 	l1, l2 = line_of_sight_covariant.((xobs1, xobs2), los)
-	_Y12, _Y21 = _biposh_flippoints(los, xobs1, xobs2, SHModes, jₒjₛ_allmodes)
-	Y12 = biposh_spheroidal(los_projected_biposh(los, _Y12, l1, l2))
-	Y21 = biposh_spheroidal(los_projected_biposh(los, _Y21, l2, l1))
+	_Y12, _Y21 = biposh_flippoints(VSHType(los), Point2D(xobs1)..., Point2D(xobs2)..., SHModes, jₒjₛ_allmodes)
+	Y12 = biposh_spheroidal(los_projected_biposh!(los, _Y12, l1, l2))
+	Y21 = biposh_spheroidal(los_projected_biposh!(los, _Y21, l2, l1))
 	return Y12, Y21
+end
+
+function trim_m(Y::SHArray{<:Any,1, <:Vector, <:Tuple{LM}}, SHModes)
+	Yp = parent(Y)
+	modes = only(SphericalHarmonicArrays.modes(Y))
+	modes_new = LM(l_range(modes), intersect(m_range(SHModes), m_range(modes)))
+	inds = [ind for (ind,(l,m)) in enumerate(modes) if m in m_range(SHModes, l)]
+	Yp = Yp[inds]
+	SHArray(Yp, modes_new)
+end
+function trim_m(Y, SHModes)
+	SHArray([trim_m(Y[ind], SHModes) for ind in eachindex(Y)],
+		SphericalHarmonicArrays.modes(Y))
+end
+
+function rotate_biposh!(Y1′2′_j1j2, Y12_j1j2, M, D)
+	modes = only(SphericalHarmonicArrays.modes(Y1′2′_j1j2))
+	modes_allm = only(SphericalHarmonicArrays.modes(Y12_j1j2))
+	for l in l_range(modes)
+		Dl = D[l]
+		for m in m_range(modes, l)
+			Y1′2′_j1j2[(l,m)] = M * sum(Dl[m′,m] * Y12_j1j2[(l,m′)] for m′ in m_range(modes_allm, l))
+		end
+	end
+	return Y1′2′_j1j2
+end
+function rotate_biposh(Y12, M, D, SHModes)
+	Y1′2′ = trim_m(Y12, SHModes)
+	for ind in eachindex(Y12)
+		Y12_j1j2 = Y12[ind]
+		Y1′2′_j1j2 = Y1′2′[ind]
+		rotate_biposh!(Y1′2′_j1j2, Y12_j1j2, M, D)
+	end
+	return Y1′2′
+end
+
+function los_projected_spheroidal_biposh_flippoints((xobs1, xobs1′)::NTuple{2,SphericalPoint},
+	(xobs2, xobs2′)::NTuple{2,SphericalPoint}, los, SHModes, jₒjₛ_allmodes)
+
+	SHModes_allm = LM(l_range(SHModes))
+
+	_Y12_allm, _Y21_allm = biposh_flippoints(VSHType(los), Point2D(xobs1)..., Point2D(xobs2)..., SHModes_allm, jₒjₛ_allmodes)
+	_Y12 = trim_m(_Y12_allm, SHModes)
+	_Y21 = trim_m(_Y21_allm, SHModes)
+	Y12 = los_projected_biposh_spheroidal(_Y12, xobs1, xobs2, los)
+	Y21 = los_projected_biposh_spheroidal(_Y21, xobs2, xobs1, los)
+	R, M11′, M22′ = rotation_points_12(HelicityCovariant(), xobs1, xobs2, xobs1′, xobs2′)
+	M11′22′ = Diagonal(LinearAlgebra.kron(M11′, M22′))
+	M22′11′ = Diagonal(LinearAlgebra.kron(M22′, M11′))
+	Rinv = inv(R)
+	α, β, γ = Rinv.theta1, Rinv.theta2, Rinv.theta3
+	lmax = maximum(l_range(SHModes))
+	D = OffsetArray([OffsetArray(wignerD(j, α, β, γ), -j:j, -j:j) for j in 0:lmax], 0:lmax)
+	_Y1′2′ = rotate_biposh(_Y12_allm, M11′22′, D, SHModes)
+	_Y2′1′ = rotate_biposh(_Y21_allm, M22′11′, D, SHModes)
+	Y1′2′ = los_projected_biposh_spheroidal(_Y1′2′, xobs1′, xobs2′, los)
+	Y2′1′ = los_projected_biposh_spheroidal(_Y2′1′, xobs2′, xobs1′, los)
+	return Y12, Y21, Y1′2′, Y2′1′
 end
 
 ########################################################################################
@@ -132,15 +167,15 @@ function populatekernelvalidation!(::Flow, ::los_earth, K::AbstractMatrix{<:Real
 end
 
 function kernel_ℑu⁺₁₀_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit,
-	xobs1::Point3D, xobs2::Point3D, los::los_direction, hω,
+	xobs1::SphericalPoint, xobs2::SphericalPoint, los::los_direction, hω,
 	p_Gsrc::Union{Nothing, ParamsGfn} = nothing,
 	p_Gobs1::Union{Nothing, ParamsGfn} = nothing,
 	p_Gobs2::Union{Nothing, ParamsGfn} = nothing,
-	r_src = r_src_default, r_obs = r_obs_default)
+	r_src = r_src_default)
 
 	@unpack p_Gsrc, p_Gobs1, p_Gobs2, Gfn_path_src, NGfn_files_src,
 	Gfn_path_obs1, NGfn_files_obs1, Gfn_path_obs2, NGfn_files_obs2 =
-		unpackGfnparams(p_Gsrc, r_src, p_Gobs1, xobs1.r, p_Gobs2, xobs2.r)
+		unpackGfnparams(p_Gsrc, r_src, p_Gobs1, radius(xobs1), p_Gobs2, radius(xobs2))
 
 	@unpack ℓ_arr, ω_arr, Nν_Gfn, dω = p_Gsrc
 
@@ -198,14 +233,14 @@ function kernel_ℑu⁺₁₀_partial(localtimer, ℓ_ωind_iter_on_proc::Produc
 	p_Gsrc::Union{Nothing, ParamsGfn} = nothing,
 	p_Gobs1::Union{Nothing, ParamsGfn} = nothing,
 	p_Gobs2::Union{Nothing, ParamsGfn} = p_Gobs1,
-	r_src = r_src_default, r_obs = r_obs_default)
+	r_src = r_src_default)
 
 	hω = permutedims(hω) #  convert to (n2, ω)
 
-	r_obs_ind = radial_grid_index(r_obs)
+	r_obs_ind = radial_grid_index(nobs1)
 
 	@unpack p_Gsrc, p_Gobs1, Gfn_path_src, NGfn_files_src =
-		unpackGfnparams(p_Gsrc, r_src, p_Gobs1, r_obs, p_Gobs2, r_obs)
+		unpackGfnparams(p_Gsrc, r_src, p_Gobs1, r_obs_default, p_Gobs2, r_obs_default)
 
 	Gfn_path_obs, NGfn_files_obs = p_Gobs1.path, p_Gobs1.num_procs
 
@@ -255,9 +290,8 @@ kernelfilenameℑu⁺₁₀(::TravelTimes, ::los_earth) = "K_δτ_ℑu⁺₁₀_
 kernelfilenameℑu⁺₁₀(::Amplitudes, ::los_radial) = "K_A_ℑu⁺₁₀.fits"
 kernelfilenameℑu⁺₁₀(::Amplitudes, ::los_earth) = "K_A_ℑu⁺₁₀_los.fits"
 
-
 function kernel_ℑu⁺₁₀(comm, m::SeismicMeasurement, xobs1, xobs2, los::los_direction = los_radial(); kwargs...)
-	r_src, r_obs = read_rsrc_robs_c_scale(kwargs)
+	r_src, = read_rsrc_robs_c_scale(kwargs)
 	p_Gsrc, p_Gobs1, p_Gobs2 = read_parameters_for_points(xobs1, xobs2; kwargs...)
 	@unpack ν_arr, ℓ_arr = p_Gsrc
 	iters = ℓ_and_ν_range(ℓ_arr, ν_arr; kwargs...)
@@ -270,7 +304,7 @@ function kernel_ℑu⁺₁₀(comm, m::SeismicMeasurement, xobs1, xobs2, los::lo
 
 	# Use the window function to compute the kernel
 	K = pmapsum(comm, kernel_ℑu⁺₁₀_partial, iters,
-		xobs1, xobs2, los, hω_arr, p_Gsrc, p_Gobs1, p_Gobs2, r_src, r_obs)
+		xobs1, xobs2, los, hω_arr, p_Gsrc, p_Gobs1, p_Gobs2, r_src)
 
 	K === nothing && return nothing
 
@@ -283,8 +317,6 @@ function kernel_ℑu⁺₁₀(comm, m::SeismicMeasurement, xobs1, xobs2, los::lo
 
 	return K
 end
-
-@two_points_on_the_surface2 kernel_ℑu⁺₁₀
 
 ########################################################################################
 # Kernels for flow velocity
@@ -467,14 +499,14 @@ reinterpretSMatrix(A::AbstractArray{<:Any, 4}) = dropdims(reinterpret(SMatrix{2,
 reinterpretSMatrix(A::AbstractArray{<:Any, 2}) = A
 
 function kernel_uₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit,
-	xobs1::Point3D, xobs2::Point3D, los::los_direction, SHModes, hω_arr,
+	xobs1::SphericalPoint, xobs2::SphericalPoint, los::los_direction, SHModes, hω_arr,
 	p_Gsrc::Union{Nothing, ParamsGfn} = nothing,
 	p_Gobs1::Union{Nothing, ParamsGfn} = nothing,
 	p_Gobs2::Union{Nothing, ParamsGfn} = nothing,
 	r_src = r_src_default)
 
 	@unpack p_Gsrc, p_Gobs1, p_Gobs2, Gfn_path_src, NGfn_files_src, Gfn_path_obs1, NGfn_files_obs1,
-	Gfn_path_obs2, NGfn_files_obs2 = unpackGfnparams(p_Gsrc, r_src, p_Gobs1, xobs1.r, p_Gobs2, xobs2.r);
+	Gfn_path_obs2, NGfn_files_obs2 = unpackGfnparams(p_Gsrc, r_src, p_Gobs1, radius(xobs1), p_Gobs2, radius(xobs2));
 
 	@unpack ℓ_arr, ω_arr, Nν_Gfn, dω = p_Gsrc
 
@@ -484,7 +516,7 @@ function kernel_uₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit
 	r₁_ind, r₂_ind = radial_grid_index.((xobs1, xobs2))
 	obs_at_same_height = r₁_ind == r₂_ind
 
-	ℓ_range_proc = UnitRange(extremaelement(ℓ_ωind_iter_on_proc, dims = 1)...)
+	ℓ_range_proc = _extremaelementrange(ℓ_ωind_iter_on_proc, dims = 1)
 
 	# Get a list of all modes that will be accessed.
 	# This can be used to open the fits files before the loops begin.
@@ -678,7 +710,7 @@ end
 
 # Compute Kₛₜ first and then compute Kₛ₀_rθϕ from that
 function kernel_uₛ₀_rθϕ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit,
-	xobs1::Point3D, xobs2::Point3D, los::los_direction, SHModes, hω_arr,
+	xobs1::SphericalPoint, xobs2::SphericalPoint, los::los_direction, SHModes, hω_arr,
 	p_Gsrc::Union{Nothing, ParamsGfn} = nothing,
 	p_Gobs1::Union{Nothing, ParamsGfn} = nothing,
 	p_Gobs2::Union{Nothing, ParamsGfn} = nothing,
@@ -712,14 +744,14 @@ end
 
 # Compute Kₛ₀_rθϕ directly
 function kernel_uₛ₀_rθϕ_partial_2(localtimer, ℓ_ωind_iter_on_proc::ProductSplit,
-	xobs1::Point3D, xobs2::Point3D, los::los_direction, SHModes, hω_arr,
+	xobs1::SphericalPoint, xobs2::SphericalPoint, los::los_direction, SHModes, hω_arr,
 	p_Gsrc::Union{Nothing, ParamsGfn} = nothing,
 	p_Gobs1::Union{Nothing, ParamsGfn} = nothing,
 	p_Gobs2::Union{Nothing, ParamsGfn} = nothing,
 	r_src = r_src_default)
 
 	@unpack p_Gsrc, p_Gobs1, p_Gobs2, Gfn_path_src, NGfn_files_src, Gfn_path_obs1, NGfn_files_obs1,
-	Gfn_path_obs2, NGfn_files_obs2 = unpackGfnparams(p_Gsrc, r_src, p_Gobs1, xobs1.r, p_Gobs2, xobs2.r)
+	Gfn_path_obs2, NGfn_files_obs2 = unpackGfnparams(p_Gsrc, r_src, p_Gobs1, radius(xobs1), p_Gobs2, radius(xobs2))
 
 	@unpack ℓ_arr, ω_arr, Nν_Gfn, dω = p_Gsrc
 
@@ -728,7 +760,7 @@ function kernel_uₛ₀_rθϕ_partial_2(localtimer, ℓ_ωind_iter_on_proc::Prod
 	r₁_ind, r₂_ind = radial_grid_index.((xobs1, xobs2))
 	obs_at_same_height = r₁_ind == r₂_ind
 
-	ℓ_range_proc = UnitRange(extremaelement(ℓ_ωind_iter_on_proc, dims = 1)...)
+	ℓ_range_proc = _extremaelementrange(ℓ_ωind_iter_on_proc, dims = 1)
 
 	# Get a list of all modes that will be accessed.
 	# This can be used to open the fits files before the loops begin.
@@ -886,48 +918,12 @@ function kernel_uₛ₀_rθϕ_partial_2(localtimer, ℓ_ωind_iter_on_proc::Prod
 	return Array(_K)
 end
 
-# Compute Kₛₜ first and then compute Kₛ₀_rθϕ from that
-# function _K_uₛ₀_rθϕ(comm, m::SeismicMeasurement, xobs1, xobs2, los::los_direction, args...; kwargs...)
-# 	r_src, = read_rsrc_robs_c_scale(kwargs)
-# 	p_Gsrc, p_Gobs1, p_Gobs2 = read_parameters_for_points(xobs1, xobs2; kwargs...)
-# 	@unpack ν_arr, ℓ_arr = p_Gsrc
-# 	iters = ℓ_and_ν_range(ℓ_arr, ν_arr; kwargs...)
-
-# 	hω_arr = get(kwargs, :hω) do
-# 		h = hω(comm, m, xobs1, xobs2, los; kwargs..., print_timings = false)
-# 		_broadcast(h, 0, comm)
-# 	end
-
-# 	K_uₛ₀ = pmapsum(comm, kernel_uₛ₀_rθϕ_partial, iters,
-# 		xobs1, xobs2, los, args..., hω_arr, p_Gsrc, p_Gobs1, p_Gobs2, r_src)
-
-# 	return iters..., K_uₛ₀
-# end
-
-# Compute Kₛ₀_rθϕ directly
-# function _K_uₛ₀_rθϕ_2(comm, m::SeismicMeasurement, xobs1, xobs2, los::los_direction, args...; kwargs...)
-# 	r_src, = read_rsrc_robs_c_scale(kwargs)
-# 	p_Gsrc, p_Gobs1, p_Gobs2 = read_parameters_for_points(xobs1, xobs2; kwargs...)
-# 	@unpack ν_arr, ℓ_arr = p_Gsrc
-# 	iters = ℓ_and_ν_range(ℓ_arr,ν_arr; kwargs...)
-
-# 	hω_arr = get(kwargs, :hω) do
-# 		h = hω(comm, m, xobs1, xobs2, los; kwargs..., print_timings = false)
-# 		_broadcast(h, 0, comm)
-# 	end
-
-# 	K_uₛ₀ = pmapsum(comm, kernel_uₛ₀_rθϕ_partial_2, iters,
-# 		xobs1, xobs2, los, args..., hω_arr, p_Gsrc, p_Gobs1, p_Gobs2, r_src)
-
-# 	return iters..., K_uₛ₀
-# end
-
 function generatefitsheader(xobs1, xobs2, SHModes, j_range, ν_ind_range)
 	FITSHeader(["r1","th1","phi1","r2","th2","phi2",
 		"l_min","m_min","l_max","m_max",
 		"j_min","j_max","nui_min","nui_max"],
-		Any[float(xobs1.r), float(xobs1.θ), float(xobs1.ϕ),
-		float(xobs2.r), float(xobs2.θ), float(xobs2.ϕ),
+		Any[float(radius(xobs1)), float(xobs1.θ), float(xobs1.ϕ),
+		float(radius(xobs2)), float(xobs2.θ), float(xobs2.ϕ),
 		l_min(SHModes), m_min(SHModes), l_max(SHModes), m_max(SHModes),
 		minimum(j_range), maximum(j_range),
 		minimum(ν_ind_range), maximum(ν_ind_range)],
@@ -990,8 +986,6 @@ function kernel_uₛₜ(comm, m::SeismicMeasurement, xobs1, xobs2,
 	SHArray(K, (axes(K)[1:2]..., SHModes))
 end
 
-@two_points_on_the_surface2 kernel_uₛₜ
-
 kernelfilenameuₛ₀rθϕ(::TravelTimes, ::los_radial) = "Kl0_δτ_u_rθϕ.fits"
 kernelfilenameuₛ₀rθϕ(::TravelTimes, ::los_earth) = "Kl0_δτ_u_rθϕ_los.fits"
 kernelfilenameuₛ₀rθϕ(::Amplitudes, ::los_radial) = "Kl0_A_u_rθϕ.fits"
@@ -1030,7 +1024,6 @@ function kernel_uₛ₀_rθϕ(comm, m::SeismicMeasurement, xobs1, xobs2, los::lo
 
 	SHArray(K_δτ_uₛ₀, (axes(K_δτ_uₛ₀)[1:2]..., SHModes))
 end
-@two_points_on_the_surface2 kernel_uₛ₀_rθϕ
 
 # Compute Kₛ₀_rθϕ directly
 function kernel_uₛ₀_rθϕ_2(comm, m::SeismicMeasurement, xobs1, xobs2, los::los_direction = los_radial(); kwargs...)
@@ -1064,7 +1057,6 @@ function kernel_uₛ₀_rθϕ_2(comm, m::SeismicMeasurement, xobs1, xobs2, los::
 
 	SHArray(K_δτ_uₛ₀, (axes(K_δτ_uₛ₀)[1:2]..., SHModes))
 end
-@two_points_on_the_surface2 kernel_uₛ₀_rθϕ_2
 
 function kernel_ψϕₛ₀(comm, m::SeismicMeasurement, xobs1, xobs2, los::los_direction = los_radial(); kwargs...)
 	Kv = kernel_uₛ₀_rθϕ(comm, m, xobs1, xobs2, los; kwargs..., save = false)
@@ -1165,16 +1157,15 @@ function populatekernelvalidation!(::SoundSpeed, ::los_earth, K::AbstractMatrix,
 end
 
 function kernel_δc₀₀_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit,
-	xobs1::Point3D, xobs2::Point3D, los::los_direction, hω,
+	xobs1::SphericalPoint, xobs2::SphericalPoint, los::los_direction, hω,
 	p_Gsrc::Union{Nothing, ParamsGfn} = nothing,
 	p_Gobs1::Union{Nothing, ParamsGfn} = nothing,
 	p_Gobs2::Union{Nothing, ParamsGfn} = nothing,
-	r_src = r_src_default,
-	r_obs = r_obs_default)
+	r_src = r_src_default)
 
 	@unpack p_Gsrc, p_Gobs1, p_Gobs2, Gfn_path_src, NGfn_files_src,
 	Gfn_path_obs1, NGfn_files_obs1, Gfn_path_obs2, NGfn_files_obs2 =
-		unpackGfnparams(p_Gsrc, r_src, p_Gobs1, xobs1.r, p_Gobs2, xobs2.r)
+		unpackGfnparams(p_Gsrc, r_src, p_Gobs1, radius(xobs1), p_Gobs2, radius(xobs2))
 
 	@unpack ℓ_arr, ω_arr, Nν_Gfn, dω = p_Gsrc
 
@@ -1250,15 +1241,14 @@ function kernel_δc₀₀_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSpl
 	p_Gsrc::Union{Nothing, ParamsGfn} = nothing,
 	p_Gobs1::Union{Nothing, ParamsGfn} = nothing,
 	p_Gobs2::Union{Nothing, ParamsGfn} = p_Gobs1,
-	r_src = r_src_default,
-	r_obs = r_obs_default)
+	r_src = r_src_default)
 
 	hω_arr = permutedims(hω_arr) #  convert to (n2, ω)
 
-	r_obs_ind = radial_grid_index(r_obs)
+	r_obs_ind = radial_grid_index(nobs1)
 
 	@unpack p_Gsrc, p_Gobs1, Gfn_path_src, NGfn_files_src =
-		unpackGfnparams(p_Gsrc, r_src, p_Gobs1, r_obs, p_Gobs2, r_obs)
+		unpackGfnparams(p_Gsrc, r_src, p_Gobs1, r_obs_default, p_Gobs2, r_obs_default)
 
 	Gfn_path_obs, NGfn_files_obs = p_Gobs1.path, p_Gobs1.num_procs
 	@unpack ℓ_arr, ω_arr, Nν_Gfn, dω = p_Gsrc
@@ -1318,7 +1308,7 @@ kernelfilenameδc₀₀(::Amplitudes, ::los_radial) = "K_A_δc₀₀.fits"
 kernelfilenameδc₀₀(::Amplitudes, ::los_earth) = "K_A_δc₀₀_los.fits"
 
 function kernel_δc₀₀(comm, m::SeismicMeasurement, xobs1, xobs2, los::los_direction = los_radial(); kwargs...)
-	r_src,r_obs = read_rsrc_robs_c_scale(kwargs)
+	r_src, = read_rsrc_robs_c_scale(kwargs)
 	p_Gsrc, p_Gobs1, p_Gobs2 = read_parameters_for_points(xobs1, xobs2; kwargs..., c_scale = 1)
 	@unpack ν_arr, ℓ_arr = p_Gsrc
 	iters = ℓ_and_ν_range(ℓ_arr,ν_arr; kwargs...)
@@ -1329,7 +1319,7 @@ function kernel_δc₀₀(comm, m::SeismicMeasurement, xobs1, xobs2, los::los_di
 	end
 
 	K = pmapsum(comm, kernel_δc₀₀_partial, iters,
-		xobs1, xobs2, los, hω_arr, p_Gsrc, p_Gobs1, p_Gobs2, r_src, r_obs)
+		xobs1, xobs2, los, hω_arr, p_Gsrc, p_Gobs1, p_Gobs2, r_src)
 	K === nothing && return nothing
 
 	if get(kwargs, :save, true)
@@ -1341,8 +1331,6 @@ function kernel_δc₀₀(comm, m::SeismicMeasurement, xobs1, xobs2, los::los_di
 
 	return K
 end
-
-@two_points_on_the_surface2 kernel_δc₀₀
 
 ########################################################################################
 # Sound-speed kernels
@@ -1389,15 +1377,15 @@ reinterpretSMatrix(A::AbstractArray{<:Any, 3}) = dropdims(reinterpret(SMatrix{2,
 reinterpretSMatrix(A::AbstractVector) = A
 
 function kernel_δcₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit,
-	xobs1::Point3D, xobs2::Point3D, los::los_direction, SHModes, hω_arr,
+	xobs1::SphericalPoint, xobs2::SphericalPoint, los::los_direction, SHModes, hω_arr,
 	p_Gsrc::Union{Nothing, ParamsGfn} = nothing,
 	p_Gobs1::Union{Nothing, ParamsGfn} = nothing,
 	p_Gobs2::Union{Nothing, ParamsGfn} = nothing,
-	r_src = r_src_default, r_obs = nothing)
+	r_src = r_src_default)
 
 	@unpack p_Gsrc, p_Gobs1, p_Gobs2, Gfn_path_src, NGfn_files_src,
 	Gfn_path_obs1, NGfn_files_obs1, Gfn_path_obs2, NGfn_files_obs2 =
-		unpackGfnparams(p_Gsrc, r_src, p_Gobs1, xobs1.r, p_Gobs2, xobs2.r)
+		unpackGfnparams(p_Gsrc, r_src, p_Gobs1, radius(xobs1), p_Gobs2, radius(xobs2))
 
 	@unpack ℓ_arr, ω_arr, Nν_Gfn, dω = p_Gsrc
 
@@ -1600,7 +1588,7 @@ function kernel_δcₛₜ(comm, m::SeismicMeasurement, xobs1, xobs2,
 
 	SHModes = getkernelmodes(; kwargs...)
 
-	r_src, r_obs = read_rsrc_robs_c_scale(kwargs)
+	r_src, = read_rsrc_robs_c_scale(kwargs)
 	p_Gsrc, p_Gobs1, p_Gobs2 = read_parameters_for_points(xobs1, xobs2; kwargs..., c_scale = 1)
 	@unpack ν_arr, ℓ_arr = p_Gsrc
 	iters = ℓ_and_ν_range(ℓ_arr,ν_arr; kwargs...)
@@ -1612,7 +1600,7 @@ function kernel_δcₛₜ(comm, m::SeismicMeasurement, xobs1, xobs2,
 	end
 
 	K_δcₛₜ = pmapsum(comm, kernel_δcₛₜ_partial, iters,
-		xobs1, xobs2, los, SHModes, hω_arr, p_Gsrc, p_Gobs1, p_Gobs2, r_src, r_obs)
+		xobs1, xobs2, los, SHModes, hω_arr, p_Gsrc, p_Gobs1, p_Gobs2, r_src)
 
 	K_δcₛₜ === nothing && return nothing
 
@@ -1626,5 +1614,3 @@ function kernel_δcₛₜ(comm, m::SeismicMeasurement, xobs1, xobs2,
 
 	SHArray(K_δcₛₜ, (axes(K_δcₛₜ, 1), SHModes))
 end
-
-@two_points_on_the_surface2 kernel_δcₛₜ

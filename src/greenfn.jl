@@ -168,17 +168,18 @@ end
 
 const Rsun, nr, r, dr, ddr, c, ρ, g, N2, γ_damping = load_solar_model()
 
-radial_grid_index(x::Point3D) = radial_grid_index(x.r)
-radial_grid_index(::Point2D) = radial_grid_index(r_obs_default)
+radial_grid_index(x::SphericalPoint) = radial_grid_index(radius(x))
 radial_grid_index(r_pt::Real) = radial_grid_index(r, r_pt)
 radial_grid_index(r, r_pt::Real) = searchsortedfirst(r, r_pt)
-radial_grid_closest(x::Point3D) = radial_grid_closest(x.r)
-radial_grid_closest(::Point2D) = radial_grid_closest(r_obs_default)
+radial_grid_closest(x::SphericalPoint) = radial_grid_closest(radius(x))
 radial_grid_closest(r_pt::Real) = radial_grid_closest(r, r_pt)
 radial_grid_closest(r, r_pt::Real) = r[radial_grid_index(r, r_pt)]
 
 const r_src_default = radial_grid_closest(r, Rsun - 75e5)
 const r_obs_default = radial_grid_closest(r, Rsun + 150e5)
+
+radius(x::Point3D) = x.r
+radius(::Point2D) = r_obs_default
 
 function read_rsrc_robs_c_scale(kwargs)
 	r_src = get(kwargs, :r_src, r_src_default)

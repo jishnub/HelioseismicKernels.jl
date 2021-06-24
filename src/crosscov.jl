@@ -58,25 +58,18 @@ end
 
 read_parameters_for_points(; kwargs...) = read_all_parameters(; kwargs...)
 
-function read_parameters_for_points(xobs1::Point3D, xobs2::Point3D; kwargs...)
+function read_parameters_for_points(xobs1::SphericalPoint, xobs2::SphericalPoint; kwargs...)
 	p_Gsrc = read_all_parameters(; kwargs...)
-	p_Gobs1 = read_all_parameters(; kwargs..., r_src = xobs1.r)
-	p_Gobs2 = read_all_parameters(; kwargs..., r_src = xobs2.r)
+	p_Gobs1 = read_all_parameters(; kwargs..., r_src = radius(xobs1))
+	p_Gobs2 = read_all_parameters(; kwargs..., r_src = radius(xobs2))
 	return p_Gsrc, p_Gobs1, p_Gobs2
 end
 
 function read_parameters_for_points(xobs1::Point3D, xobs2_arr::Vector{<:Point3D}; kwargs...)
 	p_Gsrc = read_all_parameters(; kwargs...)
-	p_Gobs1 = read_all_parameters(; kwargs..., r_src = xobs1.r)
-	p_Gobs2 = [read_all_parameters(; kwargs..., r_src = xobs2.r) for xobs2 in xobs2_arr]
+	p_Gobs1 = read_all_parameters(; kwargs..., r_src = radius(xobs1))
+	p_Gobs2 = [read_all_parameters(; kwargs..., r_src = radius(xobs2)) for xobs2 in xobs2_arr]
 	return p_Gsrc, p_Gobs1, p_Gobs2
-end
-
-function read_parameters_for_points(::Point2D, ::Union{Point2D, Vector{<:Point2D}}; kwargs...)
-	p_Gsrc = read_all_parameters(; kwargs...)
-	r_obs = get(kwargs, :r_obs, r_obs_default)
-	p_Gobs = read_all_parameters(; kwargs..., r_src = r_obs)
-	return p_Gsrc, p_Gobs, p_Gobs
 end
 
 function read_parameters_for_points(::Point2D, ::Vector{<:Point2D}; kwargs...)
@@ -86,7 +79,7 @@ function read_parameters_for_points(::Point2D, ::Vector{<:Point2D}; kwargs...)
 	return p_Gsrc, p_Gobs, p_Gobs
 end
 
-_extremaelementrange(ℓ_ωind_iter_on_proc) = UnitRange(extremaelement(ℓ_ωind_iter_on_proc, dims = 1)...)
+_extremaelementrange(ℓ_ωind_iter_on_proc; dims) = UnitRange(extremaelement(ℓ_ωind_iter_on_proc, dims = dims)...)
 
 ########################################################################################
 # Bipolar harmonics
@@ -132,18 +125,18 @@ function _multiplylos!(Y12, j1j2ind, Y12_j1j2::StaticVector, l1l2::AbstractVecto
 	Y12[j1j2ind] = Y12_j1j2 .* l1l2
 	nothing
 end
-los_projected_biposh(::los_radial, Y1, l1l2) = Y1
-los_projected_biposh(::los_earth, Y12::AbstractVector{<:Number}, l1l2) = Y12 .* l1l2
-function los_projected_biposh(::los_earth, Y12, l1l2)
+los_projected_biposh!(::los_radial, Y1, l1l2) = Y1
+los_projected_biposh!(::los_earth, Y12::AbstractVector{<:Number}, l1l2) = Y12 .* l1l2
+function los_projected_biposh!(::los_earth, Y12, l1l2)
 	for (j1j2ind, Y12_j1j2) in pairs(Y12)
 		Y12_j1j2 === nothing && continue
 		_multiplylos!(Y12, j1j2ind, Y12_j1j2, l1l2)
 	end
 	return Y12
 end
-function los_projected_biposh(los, Y12, l1, l2)
+function los_projected_biposh!(los, Y12, l1, l2)
 	l1l2 = LinearAlgebra.kron(parent(l1), parent(l2))
-	los_projected_biposh(los, Y12, l1l2)
+	los_projected_biposh!(los, Y12, l1l2)
 end
 
 _biposh_returntype(v::AbstractArray) =  _biposh_returntype(typeof(v))
@@ -174,8 +167,11 @@ function los_projected_biposh_spheroidal(computeY, xobs1, xobs2::SphericalPoint,
 	los_projected_biposh_spheroidal(Y12, xobs1, xobs2, los)
 end
 function los_projected_biposh_spheroidal(Y12, xobs1, xobs2::SphericalPoint, los)
+	los_projected_biposh_spheroidal!(deepcopy(Y12), xobs1, xobs2, los)
+end
+function los_projected_biposh_spheroidal!(Y12, xobs1, xobs2::SphericalPoint, los)
 	l1, l2 = line_of_sight_covariant.((xobs1, xobs2), los)
-	l1l2Y12 = los_projected_biposh(los, deepcopy(Y12), l1, l2)
+	l1l2Y12 = los_projected_biposh!(los, Y12, l1, l2)
 	biposh_spheroidal(l1l2Y12)
 end
 function los_projected_biposh_spheroidal_Y₀₀(xobs1::SphericalPoint, xobs2::SphericalPoint, xobs1′::SphericalPoint, xobs2′::SphericalPoint, los::los_direction, ℓ_range)
@@ -186,7 +182,7 @@ function los_projected_biposh_spheroidal_Y₀₀(Y12, xobs1::SphericalPoint, xob
 	l1, l2 = line_of_sight_covariant.((xobs1′, xobs2′), los)
 	M′ = rotation_points(HelicityCovariant(), xobs1, xobs2, xobs1′, xobs2′)
 	l1l2 = M′ * LinearAlgebra.kron(l1, l2)
-	l1l2Y12 = los_projected_biposh(los, deepcopy(Y12), l1l2)
+	l1l2Y12 = los_projected_biposh!(los, deepcopy(Y12), l1l2)
 	biposh_spheroidal(l1l2Y12)
 end
 function los_projected_biposh_spheroidal(computeY, nobs1, nobs2_arr::Vector{<:SphericalPoint}, los, ℓ_range::AbstractUnitRange)
@@ -194,11 +190,11 @@ function los_projected_biposh_spheroidal(computeY, nobs1, nobs2_arr::Vector{<:Sp
 	l2arr = line_of_sight_covariant.(nobs2_arr, los)
 	_Y12 = computeY.(los, nobs1, nobs2_arr, (ℓ_range,))
 	OffsetArray(permutedims(reduce(hcat,
-	biposh_spheroidal.(los_projected_biposh.(los, _Y12, (l1,), l2arr)))), :, ℓ_range)
+	biposh_spheroidal.(los_projected_biposh!.(los, _Y12, (l1,), l2arr)))), :, ℓ_range)
 end
 
 function los_projected_biposh_spheroidal(computeY, xobs1, xobs2, los, ℓ_ωind_iter_on_proc::ProductSplit)
-	ℓ_range = _extremaelementrange(ℓ_ωind_iter_on_proc)
+	ℓ_range = _extremaelementrange(ℓ_ωind_iter_on_proc, dims = 1)
 	los_projected_biposh_spheroidal(computeY, xobs1, xobs2, los, ℓ_range)
 end
 
@@ -210,10 +206,10 @@ function allocateGfn(los::los_direction, obs_at_same_height::Bool)
 	(; α_r₁, α_r₂)
 end
 
-function C_FITS_header(xobs1::Point3D, xobs2::Point3D)
+function C_FITS_header(xobs1::SphericalPoint, xobs2::SphericalPoint)
 	FITSHeader(["X1R", "X1THETA", "X1PHI", "X2R", "X2THETA", "X2PHI"],
-		Any[float(xobs1.r), float(xobs1.θ), float(xobs1.ϕ),
-		float(xobs2.r), float(xobs2.θ), float(xobs2.ϕ)],
+		Any[float(radius(xobs1)), float(xobs1.θ), float(xobs1.ϕ),
+		float(radius(xobs2)), float(xobs2.θ), float(xobs2.ϕ)],
 		["Radius of the first observation point",
 		"Co-latitude of the first observation point",
 		"Azimuth of the first observation point",
@@ -222,12 +218,7 @@ function C_FITS_header(xobs1::Point3D, xobs2::Point3D)
 		"Azimuth of the second observation point"])
 end
 
-function C_FITS_header(n1::Point2D, n2::Point2D)
-	xobs1 = Point3D(r_obs_default, n1)
-	xobs2 = Point3D(r_obs_default, n2)
-	C_FITS_header(xobs1, xobs2)
-end
-function C_FITS_header((n1, n1′), (n2, n2′))
+function C_FITS_header((n1, n1′)::NTuple{2,SphericalPoint}, (n2, n2′)::NTuple{2,SphericalPoint})
 	xobs1 = Point3D(r_obs_default, n1)
 	xobs2 = Point3D(r_obs_default, n2)
 	f = C_FITS_header(xobs1, xobs2)
@@ -243,9 +234,7 @@ function C_FITS_header((n1, n1′), (n2, n2′))
 end
 
 function C_FITS_header(n1::Point2D, n2::Vector{<:Point2D})
-	xobs1 = Point3D(r_obs_default, n1)
-	xobs2 = Point3D(r_obs_default, n2[1])
-	header = C_FITS_header(xobs1, xobs2)
+	header = C_FITS_header(n1, first(n2))
 
 	θmin = minimum(x->float(x.θ), n2)
 	header["THMIN"] = θmin
@@ -340,7 +329,7 @@ function Cω_partial(localtimer, ℓ_ωind_iter_on_proc,
 
 	Cω_proc = zeros(ComplexF64, 2, ν_ind_range)
 
-	ℓ_range = _extremaelementrange(ℓ_ωind_iter_on_proc)
+	ℓ_range = _extremaelementrange(ℓ_ωind_iter_on_proc, dims = 1)
 	Y12_Helicity = computeY₀₀(los, xobs1, xobs2, ℓ_range)
 	Y12 = los_projected_biposh_spheroidal(Y12_Helicity, xobs1, xobs2, los)
 	Y1′2′ = los_projected_biposh_spheroidal_Y₀₀(Y12_Helicity, xobs1, xobs2, xobs1′, xobs2′, los)
@@ -824,7 +813,7 @@ end
 ########################################################################################################
 
 function Cτ_rotating_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit,
-	xobs1::Point3D, xobs2::Point3D, los::los_radial,
+	xobs1::SphericalPoint, xobs2::SphericalPoint, los::los_radial,
 	p_Gsrc::Union{Nothing, ParamsGfn} = nothing,
 	r_src = r_src_default, c_scale = 1)
 
@@ -870,7 +859,7 @@ function Cτ_rotating_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit,
 end
 
 # Without los, radial components, 3D points
-function Cτ_rotating(comm, xobs1::Point3D, xobs2::Point3D, los::los_radial = los_radial(); kwargs...)
+function Cτ_rotating(comm, xobs1::SphericalPoint, xobs2::SphericalPoint, los::los_radial = los_radial(); kwargs...)
 	# Return C(Δϕ, ω) = RFFT(C(Δϕ,τ)) = RFFT(IRFFT(C0(Δϕ - Ωτ, ω))(τ))
 	r_src, _, c_scale = read_rsrc_robs_c_scale(kwargs)
 	p_Gsrc = read_all_parameters(; kwargs...)
@@ -913,7 +902,7 @@ function Cτ_rotating(comm, xobs1::Point3D, xobs2::Point3D, los::los_radial = lo
 					for τ_ind in τ_ind_range_proc
 						# τ goes from -T/2 to T/2-dt but is fftshifted
 						τ = (τ_ind<=div(Nt, 2) ? (τ_ind-1) : (τ_ind-1- Nt)) * dt
-						xobs2′ = Point3D(xobs2.r, xobs2.θ, xobs2.ϕ-Ω_rot*τ)
+						xobs2′ = Point3D(radius(xobs2), xobs2.θ, xobs2.ϕ-Ω_rot*τ)
 						Pl_cosχ = collectPl(cosχ(xobs1, xobs2′), lmax = lmax)
 						for ℓ in ℓ_range
 							Cτ_arr[τ_ind] += (2ℓ+1)/4π * αℓt_local[ℓ,τ_ind] * Pl_cosχ[ℓ]
@@ -936,8 +925,8 @@ function Cτ_rotating(comm, xobs1::Point3D, xobs2::Point3D, los::los_radial = lo
 	OffsetArray(Array(Cτ_arr), τ_ind_range)
 end
 
-# 2D points
-@two_points_on_the_surface Cτ_rotating
+# # 2D points
+# @two_points_on_the_surface Cτ_rotating
 
 # Without los, radial components, multiple 3D points
 function Cτ_rotating(comm, xobs1, xobs2_arr::Vector{<:SphericalPoint}, los::los_direction = los_radial();
@@ -1105,15 +1094,15 @@ _integrate_δCrω(δC_r, ::los_earth) = -4integrate(r, (@. r^2 * ρ * δC_r))
 function δCω_uniform_rotation_firstborn_integrated_over_angle_partial(
 	localtimer,
 	ℓ_ωind_iter_on_proc::ProductSplit,
-	xobs1::Point3D, xobs2::Point3D, los::los_direction,
+	xobs1::SphericalPoint, xobs2::SphericalPoint, los::los_direction,
 	p_Gsrc::Union{Nothing, ParamsGfn} = nothing,
 	p_Gobs1::Union{Nothing, ParamsGfn} = nothing,
 	p_Gobs2::Union{Nothing, ParamsGfn} = nothing,
 	r_src = r_src_default, r_obs = nothing, Ω_rot = 20e2/Rsun)
 
 	p_Gsrc = read_all_parameters(p_Gsrc, r_src = r_src)
-	p_Gobs1 = read_all_parameters(p_Gobs1, r_src = xobs1.r)
-	p_Gobs2 = read_all_parameters(p_Gobs2, r_src = xobs2.r)
+	p_Gobs1 = read_all_parameters(p_Gobs1, r_src = radius(xobs1))
+	p_Gobs2 = read_all_parameters(p_Gobs2, r_src = radius(xobs2))
 
 	Gfn_path_src, NGfn_files_src = p_Gsrc.path, p_Gsrc.num_procs
 	Gfn_path_obs1, NGfn_files_obs1 =  p_Gobs1.path, p_Gobs1.num_procs
@@ -1170,12 +1159,12 @@ end
 
 # 3D points
 function δCω_uniform_rotation_firstborn_integrated_over_angle(comm,
-	xobs1::Point3D, xobs2::Point3D, los::los_direction = los_radial(); kwargs...)
+	xobs1::SphericalPoint, xobs2::SphericalPoint, los::los_direction = los_radial(); kwargs...)
 
 	r_src, r_obs = read_rsrc_robs_c_scale(kwargs)
 	p_Gsrc = read_all_parameters(r_src = r_src)
-	p_Gobs1 = read_all_parameters(r_src = xobs1.r)
-	p_Gobs2 = read_all_parameters(r_src = xobs2.r)
+	p_Gobs1 = read_all_parameters(r_src = radius(xobs1))
+	p_Gobs2 = read_all_parameters(r_src = radius(xobs2))
 	@unpack Nν_Gfn, ν_arr, ℓ_arr, ν_start_zeros, ν_end_zeros = p_Gsrc
 	iters = ℓ_and_ν_range(ℓ_arr, ν_arr; kwargs...)
 
@@ -1192,8 +1181,8 @@ function δCω_uniform_rotation_firstborn_integrated_over_angle(comm,
 	save_to_fits_and_return("δCω_flows_FB.fits", δCω_flows_FB)
 end
 
-# 2D points
-@two_points_on_the_surface δCω_uniform_rotation_firstborn_integrated_over_angle
+# # 2D points
+# @two_points_on_the_surface δCω_uniform_rotation_firstborn_integrated_over_angle
 
 #######################################################################################################################################
 # δC(ω) = C(ω) - C0(ω) for flows
@@ -1355,15 +1344,15 @@ end
 
 function δCω_isotropicδc_firstborn_integrated_over_angle_partial(localtimer,
 	ℓ_ωind_iter_on_proc::ProductSplit,
-	xobs1::Point3D, xobs2::Point3D, los::los_direction,
+	xobs1::SphericalPoint, xobs2::SphericalPoint, los::los_direction,
 	p_Gsrc::Union{Nothing, ParamsGfn} = nothing,
 	p_Gobs1::Union{Nothing, ParamsGfn} = nothing,
 	p_Gobs2::Union{Nothing, ParamsGfn} = nothing,
 	r_src = r_src_default, r_obs = nothing, c_scale = 1+1e-5)
 
 	p_Gsrc = read_all_parameters(p_Gsrc, r_src = r_src, c_scale = 1)
-	p_Gobs1 = read_all_parameters(p_Gobs1, r_src = xobs1.r, c_scale = 1)
-	p_Gobs2 = read_all_parameters(p_Gobs2, r_src = xobs2.r, c_scale = 1)
+	p_Gobs1 = read_all_parameters(p_Gobs1, r_src = radius(xobs1), c_scale = 1)
+	p_Gobs2 = read_all_parameters(p_Gobs2, r_src = radius(xobs2), c_scale = 1)
 
 	Gfn_path_src, NGfn_files_src = p_Gsrc.path, p_Gsrc.num_procs
 	Gfn_path_obs1, NGfn_files_obs1 =  p_Gobs1.path, p_Gobs1.num_procs
@@ -1460,7 +1449,7 @@ function _δCω_isotropicδc_firstborn(comm, xobs1, xobs2, args...; kwargs...)
 end
 
 # With our without los, 3D points
-function δCω_isotropicδc_firstborn_integrated_over_angle(comm, xobs1::Point3D, xobs2::Point3D,
+function δCω_isotropicδc_firstborn_integrated_over_angle(comm, xobs1::SphericalPoint, xobs2::SphericalPoint,
 	los::los_direction = los_radial(); kwargs...)
 
 	δCω_isotropicδc_FB = _δCω_isotropicδc_firstborn(comm, xobs1, xobs2, los; kwargs...)
@@ -1471,8 +1460,8 @@ function δCω_isotropicδc_firstborn_integrated_over_angle(comm, xobs1::Point3D
 	save_to_fits_and_return(filename, δCω_isotropicδc_FB)
 end
 
-# 2D points
-@two_points_on_the_surface δCω_isotropicδc_firstborn_integrated_over_angle
+# # 2D points
+# @two_points_on_the_surface δCω_isotropicδc_firstborn_integrated_over_angle
 
 function δCt_isotropicδc_firstborn_integrated_over_angle(comm, xobs1, xobs2,
 	los::los_direction = los_radial(); kwargs...)
@@ -1494,7 +1483,7 @@ end
 
 function δCω_isotropicδc_C_minus_C0_partial(localtimer,
 	ℓ_ωind_iter_on_proc::ProductSplit,
-	xobs1::Point3D, xobs2::Point3D, los::los_earth,
+	xobs1::SphericalPoint, xobs2::SphericalPoint, los::los_earth,
 	p_Gsrc::Union{Nothing, ParamsGfn} = nothing,
 	p_G′src::Union{Nothing, ParamsGfn} = nothing,
 	r_src = r_src_default, r_obs = nothing, c_scale = 1+1e-5)
@@ -1587,7 +1576,7 @@ function _δCω_isotropicδc_C_minus_C0(comm, xobs1, xobs2,
 end
 
 # Without los, radial components, 3D points
-function δCω_isotropicδc_C_minus_C0(comm, xobs1::Point3D, xobs2::Point3D,
+function δCω_isotropicδc_C_minus_C0(comm, xobs1::SphericalPoint, xobs2::SphericalPoint,
 	los::los_radial = los_radial(); kwargs...)
 
 	c_scale = get(kwargs, :c_scale, 1+1e-5)
@@ -1602,14 +1591,14 @@ function δCω_isotropicδc_C_minus_C0(comm, xobs1::Point3D, xobs2::Point3D,
 end
 
 # With los, 3D points
-function δCω_isotropicδc_C_minus_C0(comm, xobs1::Point3D, xobs2::Point3D, los::los_earth; kwargs...)
+function δCω_isotropicδc_C_minus_C0(comm, xobs1::SphericalPoint, xobs2::SphericalPoint, los::los_earth; kwargs...)
 	δCω_isotropicδc_CmC0_los = _δCω_isotropicδc_C_minus_C0(comm, xobs1, xobs2, los; kwargs...)
 	δCω_isotropicδc_CmC0_los === nothing && return nothing
 	save_to_fits_and_return("δCω_isotropicδc_CmC0_los.fits", δCω_isotropicδc_CmC0_los)
 end
 
-# 2D points
-@two_points_on_the_surface δCω_isotropicδc_C_minus_C0
+# # 2D points
+# @two_points_on_the_surface δCω_isotropicδc_C_minus_C0
 
 ########################################################################################
 # δC(t) = C(t) - C0(t) for sound speed perturbations

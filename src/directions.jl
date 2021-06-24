@@ -93,13 +93,17 @@ function _rotation_points(::Cartesian, n1, n2, n1′, n2′)
 	return R
 end
 
-function _rotation_points(Basis, n1, n2, n1′, n2′)
+function rotation_points_12(Basis, n1, n2, n1′, n2′)
 	R = _rotation_points(Cartesian(), Point2D(n1), Point2D(n2), Point2D(n1′), Point2D(n2′))
 	Un1, Un1′, Un2, Un2′ = map((n1, n1′, n2, n2′)) do n
 		VectorSphericalHarmonics.basisconversionmatrix(Cartesian(), Basis, Point2D(n)...)
 	end
 	M′1 = Un1′ * R * Un1'
 	M′2 = Un2′ * R * Un2'
+	return R, M′1, M′2
+end
+function _rotation_points(Basis, n1, n2, n1′, n2′)
+	_, M′1, M′2 = rotation_points_12(Basis, n1, n2, n1′, n2′)
 	LinearAlgebra.kron(M′1, M′2)
 end
 rotation_points(Basis, n1, n2, n1′, n2′) = _rotation_points(Basis, n1, n2, n1′, n2′)

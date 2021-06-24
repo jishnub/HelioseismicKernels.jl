@@ -12,13 +12,13 @@ using JLD2
 using LsqFit
 using NPZ
 using OffsetArrays
-using PointsOnASphere
 using Polynomials
 using Printf
 using ProgressMeter
 using PyCall
 using PyPlot
 using SphericalHarmonicModes
+using SphericalHarmonicArrays
 
 @everywhere begin
 	using ParallelUtilities
@@ -2004,6 +2004,82 @@ function plotruntimes_flows()
 	fig.tight_layout()
 	savefig(joinpath(SCRATCH[],"runtimesflows.eps"))
 end
+
+function plotruntime_flows_2()
+	radout = readdlm("kernel_radial224.out")
+	Tradlmax = Int.(radout[:,2])
+	Tradtime = Int.(radout[:,3])
+
+	losout = readdlm("kernel_los224.out")
+	Tlosmax = Int.(losout[:,2])
+	Tlosime = Int.(losout[:,3])
+
+	f, axlist = subplots(nrows = 2, ncols = 1)
+	axlist[1].semilogy(Tradlmax, Tradtime * 224 / 60^2, color= "black", label = "radial")
+	axlist[1].semilogy(Tlosmax, Tlosime * 224 / 60^2, color = "grey", marker = ".", ls = "dashed", label = "line-of-sight")
+	axlist[1].legend(loc="best", fontsize = 11)
+	axlist[1].yaxis.set_major_locator(ticker.LogLocator())
+	axlist[1].yaxis.set_major_formatter(ticker.ScalarFormatter())
+	axlist[1].set_ylabel("Computation time [hr]", fontsize = 11)
+
+	axlist[2].plot(Tradlmax, (Tlosime - Tradtime) ./ Tradtime, color = "black", marker = ".")
+	axlist[2].set_ylabel("Difference", fontsize = 11)
+	axlist[2].set_xlabel("Maximum angular degree", fontsize = 11)
+	axlist[2].yaxis.set_major_locator(ticker.MaxNLocator(4))
+	axlist[2].yaxis.set_major_formatter(ticker.PercentFormatter(xmax = 1))
+	axlist[2].set_ylim(0, 1.1)
+
+	f.subplots_adjust(hspace = 0)
+	f.set_size_inches(4,4)
+	f.tight_layout()
+	f.savefig("plots/runtimes.eps")
+end
+
+function compare_radial_los_kernel(; s_max = 15)
+	Kradfile = joinpath(SCRATCH_kerneldir[], "Kst_δτ_u_jmax100_lmax$(s_max)_mmax$(s_max).fits")
+	_Krad = reinterpret(ComplexF64, FITSIO.fitsread(Kradfile, 1, :, 2:2, :)::Array{Float64, 3})
+	Krad = SHArray(_Krad, (:, :, LM(0:s_max, 0:s_max)))
+	Klosfile = joinpath(SCRATCH_kerneldir[], "Kst_δτ_u_jmax100_lmax$(s_max)_mmax$(s_max)_los.fits")
+	_Klos = reinterpret(ComplexF64, FITSIO.fitsread(Klosfile, 1, :, 2:2, :)::Array{Float64, 3})
+	Klos = SHArray(_Klos, (:, :, LM(0:s_max, 0:s_max)))
+
+	nrows = 4; ncols = 4
+	f, axlist = subplots(nrows = nrows, ncols = ncols)
+	r_in_cutoff = 0.99
+	r_out_cutoff = 1
+	r_inds = searchsortedfirst(r_frac, r_in_cutoff):searchsortedlast(r_frac, r_out_cutoff)
+
+	for ax in axlist
+		ax.set_visible(false)
+	end
+
+	for (row,l) in enumerate(0:8:s_max), (col,m) in enumerate(0:8:l)
+		axlist[row,col].plot(r_frac[r_inds], real(Krad[r_inds, 1, (l,m)]),
+			color = "grey", label = "radial")
+		axlist[row,col].plot(r_frac[r_inds], real(Klos[r_inds, 1, (l,m)]),
+			ls = "dashed", marker = ".", markevery = 20,
+			ms = 6, color = "black", label = "line-of-sight")
+		axlist[row,col].xaxis.set_major_locator(ticker.MaxNLocator(2))
+		axlist[row,col].set_visible(true)
+		axlist[row,col].yaxis.set_major_formatter(ticker.ScalarFormatter(useMathText=true))
+		axlist[row,col].set_title("($l, $m)", loc = "right", fontsize = 11)
+		if row != nrows
+			axlist[row,col].xaxis.set_major_formatter(ticker.NullFormatter())
+		else
+			axlist[row,col].set_xlabel(L"r/R_\odot", fontsize = 11)
+		end
+	end
+
+	lg = axlist[1,1].get_legend_handles_labels()
+	axlist[1,ncols].legend(lg..., loc="best", fontsize = 11)
+	axlist[1,ncols].set_visible(true)
+	axlist[1,ncols].axis("off")
+
+	f.set_size_inches(8,5)
+	f.tight_layout()
+	f.savefig("plots/kernel_radial_los_limb.eps")
+end
+
 
 # Green function
 
