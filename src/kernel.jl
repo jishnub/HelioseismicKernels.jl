@@ -325,10 +325,10 @@ end
 @inline function mulprefactor!(K::AbstractArray{<:Real}, vindskip = 0)
 	@turbo @. K *= ρ
 	@assert axes(K,1) == eachindex(r) "first axis of K does not match that of r"
-	for lmind in UnitRange(axes(K, 3)), vind in UnitRange(axes(K, 2))
+	for trail_ind in CartesianIndices(UnitRange.(axes(K)[3:end])), vind in UnitRange(axes(K, 2))
 		vind == vindskip && continue # radial component
-		@turbo for r_ind in eachindex(r)
-			K[r_ind, vind, lmind] /= r[r_ind]
+		for r_ind in eachindex(r)
+			K[r_ind, vind, trail_ind] /= r[r_ind]
 		end
 	end
 end
@@ -377,6 +377,56 @@ function populatekernel!(::Flow, ::los_radial, K::AbstractArray{<:Complex,3},
 
 	return K
 end
+function populatekernel!(::Flow, ::los_radial, K::AbstractArray{<:Complex,4},
+	SHModes, (Yjₒjₛ_lm_n₁n₂, Yjₒjₛ_lm_n₁′n₂′)::Tuple{Any, Any},
+	(Yjₒjₛ_lm_n₂n₁, Yjₒjₛ_lm_n₂′n₁′)::Tuple{Any, Any},
+	(l, m), (jₛ, jₒ, ω),
+	twoimagconjhωHγℓjₒjₛ_r₁r₂,
+	twoimagconjhωconjHγℓjₒjₛ_r₂r₁,
+	pre⁰, pre⁺, phase)
+
+	mode_ind = modeindex(firstshmodes(Yjₒjₛ_lm_n₁n₂), (l, m))
+
+	Pʲₒʲₛₗₘ_₀₀_n₁n₂ = Yjₒjₛ_lm_n₁n₂[mode_ind]
+	Pʲₒʲₛₗₘ_₀₀_n₂n₁ = Yjₒjₛ_lm_n₂n₁[mode_ind]
+	Pʲₒʲₛₗₘ_₀₀_n₁′n₂′ = Yjₒjₛ_lm_n₁′n₂′[mode_ind]
+	Pʲₒʲₛₗₘ_₀₀_n₂′n₁′ = Yjₒjₛ_lm_n₂′n₁′[mode_ind]
+
+	iszero(Pʲₒʲₛₗₘ_₀₀_n₁n₂) && iszero(Pʲₒʲₛₗₘ_₀₀_n₂n₁) && return
+
+	anyzeromom = l == 0 || jₛ == 0
+	evenmom = iseven(jₒ + jₛ + l)
+
+	zeroindT, plusindT = axes(twoimagconjhωconjHγℓjₒjₛ_r₂r₁, 2)
+	minusindK, zeroindK, plusindK = axes(K, 2)
+	lm_ind_K = modeindex(SHModes, (l, m))
+
+	if evenmom
+		@turbo for r_ind in eachindex(r)
+			TP₁₂⁰ = pre⁰ * Pʲₒʲₛₗₘ_₀₀_n₁n₂ * twoimagconjhωHγℓjₒjₛ_r₁r₂[r_ind, zeroindT]
+			TP₂₁⁰ = pre⁰ * Pʲₒʲₛₗₘ_₀₀_n₂n₁ * twoimagconjhωconjHγℓjₒjₛ_r₂r₁[r_ind, zeroindT]
+			TP₁′₂′⁰ = pre⁰ * Pʲₒʲₛₗₘ_₀₀_n₁′n₂′ * twoimagconjhωHγℓjₒjₛ_r₁r₂[r_ind, zeroindT]
+			TP₂′₁′⁰ = pre⁰ * Pʲₒʲₛₗₘ_₀₀_n₂′n₁′ * twoimagconjhωconjHγℓjₒjₛ_r₂r₁[r_ind, zeroindT]
+
+			K[1,zeroindK, r_ind, lm_ind_K] += TP₂₁⁰ - TP₁₂⁰
+			K[2,zeroindK, r_ind, lm_ind_K] += TP₂′₁′⁰ - TP₁′₂′⁰
+		end
+	end
+	anyzeromom && return K
+	@turbo for r_ind in eachindex(r)
+		TP₁₂¹ = pre⁺ * Pʲₒʲₛₗₘ_₀₀_n₁n₂ * twoimagconjhωHγℓjₒjₛ_r₁r₂[r_ind, plusindT]
+		TP₂₁¹ = pre⁺ * Pʲₒʲₛₗₘ_₀₀_n₂n₁ * twoimagconjhωconjHγℓjₒjₛ_r₂r₁[r_ind, plusindT]
+		TP₁′₂′¹ = pre⁺ * Pʲₒʲₛₗₘ_₀₀_n₁′n₂′ * twoimagconjhωHγℓjₒjₛ_r₁r₂[r_ind, plusindT]
+		TP₂′₁′¹ = pre⁺ * Pʲₒʲₛₗₘ_₀₀_n₂′n₁′ * twoimagconjhωconjHγℓjₒjₛ_r₂r₁[r_ind, plusindT]
+
+		K[1,plusindK, r_ind, lm_ind_K] += TP₂₁¹ - TP₁₂¹
+		K[2,plusindK, r_ind, lm_ind_K] += TP₂′₁′¹ - TP₁′₂′¹
+		K[1,minusindK, r_ind, lm_ind_K] += phase * (TP₂₁¹ - TP₁₂¹)
+		K[2,minusindK, r_ind, lm_ind_K] += phase * (TP₂′₁′¹ - TP₁′₂′¹)
+	end
+
+	return K
+end
 function populatekernel!(::Flow, ::los_earth, K::AbstractArray{<:Complex,3},
 	SHModes, Yjₒjₛ_lm_n₁n₂, Yjₒjₛ_lm_n₂n₁,
 	(l, m), (jₛ, jₒ, ω),
@@ -410,6 +460,54 @@ function populatekernel!(::Flow, ::los_earth, K::AbstractArray{<:Complex,3},
 
 		K[plusindK, r_ind, lm_ind_K] += TP₂₁¹ - TP₁₂¹
 		K[minusindK, r_ind, lm_ind_K] += phase * (TP₂₁¹ - TP₁₂¹)
+	end
+
+	return K
+end
+function populatekernel!(::Flow, ::los_earth, K::AbstractArray{<:Complex,4},
+	SHModes,
+	(Yjₒjₛ_lm_n₁n₂, Yjₒjₛ_lm_n₁′n₂′)::NTuple{2,Any},
+	(Yjₒjₛ_lm_n₂n₁, Yjₒjₛ_lm_n₂′n₁′)::NTuple{2,Any},
+	(l, m), (jₛ, jₒ, ω),
+	twoimagconjhωHγℓjₒjₛ_r₁r₂,
+	twoimagconjhωconjHγℓjₒjₛ_r₂r₁,
+	pre⁰, pre⁺, phase)
+
+	mode_ind = modeindex(firstshmodes(Yjₒjₛ_lm_n₁n₂), (l, m))
+	lm_ind_K = modeindex(SHModes, (l, m))
+
+	_Yjₒjₛ_lm_n₁n₂ = parent(Yjₒjₛ_lm_n₁n₂[mode_ind])
+	_Yjₒjₛ_lm_n₂n₁ = parent(Yjₒjₛ_lm_n₂n₁[mode_ind])
+	_Yjₒjₛ_lm_n₁′n₂′ = parent(Yjₒjₛ_lm_n₁′n₂′[mode_ind])
+	_Yjₒjₛ_lm_n₂′n₁′ = parent(Yjₒjₛ_lm_n₂′n₁′[mode_ind])
+
+	minusindK, zeroindK, plusindK = axes(K, 2)
+	zeroindT, plusindT = axes(twoimagconjhωconjHγℓjₒjₛ_r₂r₁, 3)
+
+	anyzeromom = l == 0 || jₛ == 0
+	evenmom = iseven(jₒ + jₛ + l)
+	if evenmom
+		@turbo for r_ind in eachindex(r)
+			TP₁₂⁰ = pre⁰ * sum(_Yjₒjₛ_lm_n₁n₂ .* twoimagconjhωHγℓjₒjₛ_r₁r₂[1, r_ind, zeroindT])
+			TP₂₁⁰ = pre⁰ * sum(_Yjₒjₛ_lm_n₂n₁ .* twoimagconjhωconjHγℓjₒjₛ_r₂r₁[1, r_ind, zeroindT])
+			TP₁′₂′⁰ = pre⁰ * sum(_Yjₒjₛ_lm_n₁′n₂′ .* twoimagconjhωHγℓjₒjₛ_r₁r₂[2, r_ind, zeroindT])
+			TP₂′₁′⁰ = pre⁰ * sum(_Yjₒjₛ_lm_n₂′n₁′ .* twoimagconjhωconjHγℓjₒjₛ_r₂r₁[2, r_ind, zeroindT])
+
+			K[1, zeroindK, r_ind, lm_ind_K] += TP₂₁⁰ - TP₁₂⁰
+			K[2, zeroindK, r_ind, lm_ind_K] += TP₂′₁′⁰ - TP₁′₂′⁰
+		end
+	end
+	anyzeromom && return K
+	@turbo for r_ind in eachindex(r)
+		TP₁₂¹ = pre⁺ * sum(_Yjₒjₛ_lm_n₁n₂ .* twoimagconjhωHγℓjₒjₛ_r₁r₂[1, r_ind, plusindT])
+		TP₂₁¹ = pre⁺ * sum(_Yjₒjₛ_lm_n₂n₁ .* twoimagconjhωconjHγℓjₒjₛ_r₂r₁[1, r_ind, plusindT])
+		TP₁′₂′¹ = pre⁺ * sum(_Yjₒjₛ_lm_n₁′n₂′ .* twoimagconjhωHγℓjₒjₛ_r₁r₂[2, r_ind, plusindT])
+		TP₂′₁′¹ = pre⁺ * sum(_Yjₒjₛ_lm_n₂′n₁′ .* twoimagconjhωconjHγℓjₒjₛ_r₂r₁[2, r_ind, plusindT])
+
+		K[1, plusindK, r_ind, lm_ind_K] += TP₂₁¹ - TP₁₂¹
+		K[2, plusindK, r_ind, lm_ind_K] += TP₂′₁′¹ - TP₁′₂′¹
+		K[1, minusindK, r_ind, lm_ind_K] += phase * (TP₂₁¹ - TP₁₂¹)
+		K[2, minusindK, r_ind, lm_ind_K] += phase * (TP₂′₁′¹ - TP₁′₂′¹)
 	end
 
 	return K
@@ -495,8 +593,8 @@ function populatekernelrθϕl0!(::Flow, ::los_earth, K::AbstractArray{<:Real, 3}
 	return K
 end
 
-reinterpretSMatrix(A::AbstractArray{<:Any, 4}) = dropdims(reinterpret(SMatrix{2,2,eltype(A),4}, reshape(A, 4, size(A)[3:4]...)), dims = 1)
-reinterpretSMatrix(A::AbstractArray{<:Any, 2}) = A
+reinterpretSMatrix(A::AbstractArray, ::los_earth) = dropdims(reinterpret(SMatrix{2,2,eltype(A),4}, reshape(A, 4, size(A)[3:end]...)), dims = 1)
+reinterpretSMatrix(A::AbstractArray, ::los_radial) = A
 
 function kernel_uₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit,
 	xobs1::SphericalPoint, xobs2::SphericalPoint, los::los_direction, SHModes, hω_arr,
@@ -547,8 +645,8 @@ function kernel_uₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit
 	H₂₁ = _structarrayparent(Hγℓjₒjₛ_r₂r₁, HT)
 	H₁₂ = _structarrayparent(Hγℓjₒjₛ_r₁r₂, HT)
 
-	twoimagconjhωconjHγℓjₒjₛ_r₂r₁S = reinterpretSMatrix(twoimagconjhωconjHγℓjₒjₛ_r₂r₁P);
-	twoimagconjhωHγℓjₒjₛ_r₁r₂S = reinterpretSMatrix(twoimagconjhωHγℓjₒjₛ_r₁r₂P);
+	twoimagconjhωconjHγℓjₒjₛ_r₂r₁S = reinterpretSMatrix(twoimagconjhωconjHγℓjₒjₛ_r₂r₁P, los);
+	twoimagconjhωHγℓjₒjₛ_r₁r₂S = reinterpretSMatrix(twoimagconjhωHγℓjₒjₛ_r₁r₂P, los);
 
 	jₒjₛ_allmodes = L2L1Triangle(ℓ_range_proc, s_max, ℓ_arr)
 	jₒrange = l2_range(jₒjₛ_allmodes)
@@ -708,6 +806,226 @@ function kernel_uₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit
 	return AK
 end
 
+function kernel_uₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit,
+	(xobs1, xobs1′)::NTuple{2,SphericalPoint},
+	(xobs2, xobs2′)::NTuple{2,SphericalPoint}, los::los_direction, SHModes, hω_arr,
+	p_Gsrc::Union{Nothing, ParamsGfn} = nothing,
+	p_Gobs1::Union{Nothing, ParamsGfn} = nothing,
+	p_Gobs2::Union{Nothing, ParamsGfn} = nothing,
+	r_src = r_src_default)
+
+	@unpack p_Gsrc, p_Gobs1, p_Gobs2, Gfn_path_src, NGfn_files_src, Gfn_path_obs1, NGfn_files_obs1,
+	Gfn_path_obs2, NGfn_files_obs2 = unpackGfnparams(p_Gsrc, r_src, p_Gobs1, radius(xobs1), p_Gobs2, radius(xobs2));
+
+	@unpack ℓ_arr, ω_arr, Nν_Gfn, dω = p_Gsrc
+
+	s_range = l_range(SHModes)
+	s_max = maximum(s_range)
+
+	r₁_ind, r₂_ind = radial_grid_index.((xobs1, xobs2))
+	obs_at_same_height = r₁_ind == r₂_ind
+
+	ℓ_range_proc = _extremaelementrange(ℓ_ωind_iter_on_proc, dims = 1)
+
+	# Get a list of all modes that will be accessed.
+	# This can be used to open the fits files before the loops begin.
+	# This will cut down on FITS IO costs
+	Gfn_fits_files_src = Gfn_fits_files(Gfn_path_src,
+						(ℓ_arr, 1:Nν_Gfn), ℓ_ωind_iter_on_proc, NGfn_files_src)
+
+	# Gℓ′ω(r, robs) files
+	Gfn_fits_files_obs1 = Gfn_fits_files(Gfn_path_obs1,
+						(ℓ_arr, 1:Nν_Gfn), ℓ_ωind_iter_on_proc, s_max, NGfn_files_obs1)
+	# Gℓ′ω(r, robs) files
+	Gfn_fits_files_obs2 = Gfn_fits_files(Gfn_path_obs2,
+						(ℓ_arr, 1:Nν_Gfn), ℓ_ωind_iter_on_proc, s_max, NGfn_files_obs2)
+
+	Kre = zeros(2, 3, nr, length(SHModes)); # first axis is for vector indices (-1,0,1 in the helicity basis)
+	K = StructArray{ComplexF64}((Kre, zero(Kre))); # Kγₗₘ(r, x₁, x₂)
+
+	ind⁰ = 2 # index of the vector component 0
+
+	arrs = allocatearrays(Flow(), los, obs_at_same_height, Val(2));
+	@unpack Gsrc, drGsrc, Gparts_r₁, Gparts_r₂,
+	Gγℓjₒjₛ_r₁, Gγℓjₒjₛ_r₂, Hγℓjₒjₛ_r₁r₂, Hγℓjₒjₛ_r₂r₁ = arrs;
+	@unpack Gparts_r₁_2, Gparts_r₂_2 = arrs;
+	@unpack twoimagconjhωconjHγℓjₒjₛ_r₂r₁, twoimagconjhωHγℓjₒjₛ_r₁r₂ = arrs;
+	twoimagconjhωconjHγℓjₒjₛ_r₂r₁P, twoimagconjhωHγℓjₒjₛ_r₁r₂P = map(parent, (twoimagconjhωconjHγℓjₒjₛ_r₂r₁, twoimagconjhωHγℓjₒjₛ_r₁r₂));
+
+	HT = HybridArray{Tuple{sizeindG(los)...,sizeindG(los)...,StaticArrays.Dynamic(),2}}
+	H₂₁ = _structarrayparent(Hγℓjₒjₛ_r₂r₁, HT)
+	H₁₂ = _structarrayparent(Hγℓjₒjₛ_r₁r₂, HT)
+
+	twoimagconjhωconjHγℓjₒjₛ_r₂r₁S = reinterpretSMatrix(twoimagconjhωconjHγℓjₒjₛ_r₂r₁P, los);
+	twoimagconjhωHγℓjₒjₛ_r₁r₂S = reinterpretSMatrix(twoimagconjhωHγℓjₒjₛ_r₁r₂P, los);
+
+	jₒjₛ_allmodes = L2L1Triangle(ℓ_range_proc, s_max, ℓ_arr)
+	jₒrange = l2_range(jₒjₛ_allmodes)
+	@unpack Gobs1_cache, Gobs2_cache = arrs
+	for jₒ in jₒrange
+		Gobs1_cache[jₒ] = zeros(ComplexF64, axes(Gsrc))
+		if !obs_at_same_height
+			Gobs2_cache[jₒ] = zeros(ComplexF64, axes(Gsrc))
+		end
+	end
+
+	@timeit localtimer "biposh" begin
+		Y12, Y21, Y1′2′, Y2′1′ =
+			los_projected_spheroidal_biposh_flippoints((xobs1, xobs1′),
+			(xobs2, xobs2′), los, SHModes, jₒjₛ_allmodes)
+	end
+
+	C = zeros(0:1, 0:s_max, l2_range(jₒjₛ_allmodes), ℓ_range_proc)
+
+	for jₛ in axes(C, 4), jₒ in axes(C, 3), ℓ in axes(C, 2)
+
+		C[0, ℓ, jₒ, jₛ] = if iseven(jₒ+jₛ+ℓ)
+							clebschgordan(Float64, jₒ, 0, jₛ, 0, ℓ, 0)
+						else
+							zero(Float64)
+						end
+
+		C[1, ℓ, jₒ, jₛ] = if ℓ > 0 && jₛ > 0
+							clebschgordan(Float64, jₒ, 0, jₛ, 1, ℓ, 1)
+						else
+							zero(Float64)
+						end
+	end
+
+	# for some reason the types of these variables were not being inferred
+	C⁰::Float64, C⁺::Float64 = 0, 0
+	phase::Int = 1
+	pre⁰::Float64, pre⁺::Float64 = 0, 0
+
+	ω_ind_prev = -1 # something unrealistic to start off with
+
+	# Loop over the Greenfn files
+	for (jₛ, ω_ind) in ℓ_ωind_iter_on_proc
+		ω = ω_arr[ω_ind]
+		h_ω_1 = hω_arr[ω_ind, 1]
+		h_ω_2 = hω_arr[ω_ind, 2]
+		h_ω = SVector{2}(h_ω_1, h_ω_2)
+		dωω³Pω = dω/2π * ω^3 * Powspec(ω)
+		Ωjₛ0 = Ω(jₛ, 0)
+
+		@timeit localtimer "FITS" begin
+		# Green function about the source radius
+		read_Gfn_file_at_index!(Gsrc, Gfn_fits_files_src,
+		(ℓ_arr, 1:Nν_Gfn), (jₛ, ω_ind), NGfn_files_src, 1:2, srcindFITS(los), :, 1)
+
+		# Derivative of Green function about the source radius
+		read_Gfn_file_at_index!(drGsrc, Gfn_fits_files_src,
+		(ℓ_arr, 1:Nν_Gfn), (jₛ, ω_ind), NGfn_files_src, 1:2, srcindFITS(los), :, 2)
+		end # timer
+
+		Gα₂r_r₁_rₛ = αrcomp(Gsrc, r₁_ind, los)
+		Gα₂r_r₂_rₛ = αrcomp(Gsrc, r₂_ind, los)
+
+		for jₒ in l2_range(jₒjₛ_allmodes, jₛ)
+
+			jₒjₛ_ind = modeindex(jₒjₛ_allmodes, (jₒ, jₛ))
+
+			Yjₒjₛ_lm_n₁n₂ = Y12[jₒjₛ_ind]
+			Yjₒjₛ_lm_n₂n₁ = Y21[jₒjₛ_ind]
+			Yjₒjₛ_lm_n₁′n₂′ = Y1′2′[jₒjₛ_ind]
+			Yjₒjₛ_lm_n₂′n₁′ = Y2′1′[jₒjₛ_ind]
+
+			(Yjₒjₛ_lm_n₁n₂ === nothing || Yjₒjₛ_lm_n₂n₁ === nothing) && continue
+			(Yjₒjₛ_lm_n₁′n₂′ === nothing || Yjₒjₛ_lm_n₂′n₁′ === nothing) && continue
+
+			# Change shmodes to ML to avoid recomputing the radial term for same l
+			modesML = intersect(ML(firstshmodes(Yjₒjₛ_lm_n₁n₂)), ML(SHModes))
+			modesML === nothing && continue
+
+			Gobs1 = Gobs1_cache[jₒ]
+			@timeit localtimer "FITS" begin
+			# Green functions based at the observation point
+			if ω_ind != ω_ind_prev || jₒ ∉ l2_range(jₒjₛ_allmodes, jₛ-1)
+				read_Gfn_file_at_index!(Gobs1, Gfn_fits_files_obs1,
+				(ℓ_arr, 1:Nν_Gfn), (jₒ, ω_ind), NGfn_files_obs1, 1:2, srcindFITS(los), :, 1)
+			end
+			end # timer
+
+			@timeit localtimer "radial term 1" begin
+			Gⱼₒⱼₛω_u⁰⁺_firstborn!(Gparts_r₁, Gparts_r₁_2, Gsrc, drGsrc, jₛ, Gobs1, jₒ, los)
+			end # timer
+
+			if !obs_at_same_height
+				Gobs2 = Gobs2_cache[jₒ]
+				@timeit localtimer "FITS" begin
+				if ω_ind != ω_ind_prev || jₒ ∉ l2_range(jₒjₛ_allmodes, jₛ-1)
+					read_Gfn_file_at_index!(Gobs2, Gfn_fits_files_obs2,
+					(ℓ_arr, 1:Nν_Gfn), (jₒ, ω_ind), NGfn_files_obs2, 1:2, srcindFITS(los), :, 1)
+				end
+				end # timer
+
+				@timeit localtimer "radial term 1" begin
+				Gⱼₒⱼₛω_u⁰⁺_firstborn!(Gparts_r₂, Gparts_r₂_2, Gsrc, drGsrc, jₛ, Gobs2, jₒ, los)
+				end #timer
+			end
+
+			l_prev = -1 # something unrealistic to start off
+
+			for (l, m) in modesML
+				# Check if triangle condition is satisfied
+				# The outer loop is over all possible jₛ and jₒ for a given l_max
+				# Not all combinations would contribute towards a specific l
+				δ(jₛ, jₒ, l) || continue
+
+				if l != l_prev
+					@timeit localtimer "radial term 2" begin
+						@timeit localtimer "H" begin
+							Hγₗⱼₒⱼₛω_α₁α₂_firstborn!(Hγℓjₒjₛ_r₁r₂, Gparts_r₁_2, Gγℓjₒjₛ_r₁, Gα₂r_r₂_rₛ, jₒ, jₛ, l)
+
+							if !obs_at_same_height
+								Hγₗⱼₒⱼₛω_α₁α₂_firstborn!(Hγℓjₒjₛ_r₂r₁, Gparts_r₂_2, Gγℓjₒjₛ_r₂, Gα₂r_r₁_rₛ, jₒ, jₛ, l)
+							end
+						end
+
+						@timeit localtimer "T" begin
+							@turbo for Itrail in CartesianIndices(axes(H₂₁)[3:4]), nind in eachindex(h_ω),
+									Ilead in CartesianIndices(axes(H₂₁)[1:2])
+								twoimagconjhωconjHγℓjₒjₛ_r₂r₁P[Ilead, nind, Itrail] = -2imag(h_ω[nind] * H₂₁[Ilead, Itrail])
+								twoimagconjhωHγℓjₒjₛ_r₁r₂P[Ilead, nind, Itrail] = 2imag(conj(h_ω[nind]) * H₁₂[Ilead, Itrail])
+							end
+						end
+
+						C⁰ = C[0, l, jₒ, jₛ]
+						C⁺ = C[1, l, jₒ, jₛ]
+						phase = (-1)^(jₒ + jₛ + l)
+						coeffj = √((2jₒ+1)*(2jₛ+1)/π/(2l+1))
+
+						pre⁰ = dωω³Pω * coeffj * C⁰
+						pre⁺ = dωω³Pω * coeffj * Ωjₛ0 * C⁺
+						l_prev = l
+					end
+				end
+
+				@timeit localtimer "kernel" begin
+				populatekernel!(Flow(), los, K,
+					SHModes,
+					(Yjₒjₛ_lm_n₁n₂, Yjₒjₛ_lm_n₁′n₂′),
+					(Yjₒjₛ_lm_n₂n₁, Yjₒjₛ_lm_n₂′n₁′),
+					(l, m), (jₛ, jₒ, ω),
+					twoimagconjhωHγℓjₒjₛ_r₁r₂S,
+					twoimagconjhωconjHγℓjₒjₛ_r₂r₁S,
+					pre⁰, pre⁺, phase)
+				end #timer
+			end
+		end
+
+		ω_ind_prev = ω_ind
+	end
+
+	foreach(closeGfnfits, (Gfn_fits_files_src, Gfn_fits_files_obs1, Gfn_fits_files_obs2))
+
+	_K = permutedims(K, [3,2,4,1])
+	mulprefactor!(_K, ind⁰)
+	AK = Array(no_offset_view(_K))
+
+	return AK
+end
+
 # Compute Kₛₜ first and then compute Kₛ₀_rθϕ from that
 function kernel_uₛ₀_rθϕ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit,
 	xobs1::SphericalPoint, xobs2::SphericalPoint, los::los_direction, SHModes, hω_arr,
@@ -790,8 +1108,8 @@ function kernel_uₛ₀_rθϕ_partial_2(localtimer, ℓ_ωind_iter_on_proc::Prod
 	H₁₂R = HT(parent(Hγℓjₒjₛ_r₁r₂.re))
 	H₁₂I = HT(parent(Hγℓjₒjₛ_r₁r₂.im))
 
-	twoimagconjhωconjHγℓjₒjₛ_r₂r₁S = reinterpretSMatrix(twoimagconjhωconjHγℓjₒjₛ_r₂r₁P)
-	twoimagconjhωHγℓjₒjₛ_r₁r₂S = reinterpretSMatrix(twoimagconjhωHγℓjₒjₛ_r₁r₂P)
+	twoimagconjhωconjHγℓjₒjₛ_r₂r₁S = reinterpretSMatrix(twoimagconjhωconjHγℓjₒjₛ_r₂r₁P, los)
+	twoimagconjhωHγℓjₒjₛ_r₁r₂S = reinterpretSMatrix(twoimagconjhωHγℓjₒjₛ_r₁r₂P, los)
 
 	jₒjₛ_allmodes = L2L1Triangle(ℓ_range_proc, s_max, ℓ_arr)
 
@@ -911,14 +1229,14 @@ function kernel_uₛ₀_rθϕ_partial_2(localtimer, ℓ_ωind_iter_on_proc::Prod
 		end
 	end
 
-	map(closeGfnfits, (Gfn_fits_files_src, Gfn_fits_files_obs1, Gfn_fits_files_obs2))
+	foreach(closeGfnfits, (Gfn_fits_files_src, Gfn_fits_files_obs1, Gfn_fits_files_obs2))
 	_K = Base.PermutedDimsArray(K, (2,1,3))
 	mulprefactor!(_K, indr)
 
 	return Array(_K)
 end
 
-function generatefitsheader(xobs1, xobs2, SHModes, j_range, ν_ind_range)
+function generatefitsheader(xobs1::SphericalPoint, xobs2::SphericalPoint, SHModes, j_range, ν_ind_range)
 	FITSHeader(["r1","th1","phi1","r2","th2","phi2",
 		"l_min","m_min","l_max","m_max",
 		"j_min","j_max","nui_min","nui_max"],
@@ -939,6 +1257,26 @@ function generatefitsheader(xobs1, xobs2, SHModes, j_range, ν_ind_range)
 		"Maximum azimuthal order of the flow",
 		"Minimum wave mode","Maximum wave mode",
 		"Minimum wave frequency index","Maximum wave frequency index"])
+end
+function generatefitsheader((xobs1, xobs1′)::NTuple{2,SphericalPoint},
+		(xobs2, xobs2′)::NTuple{2,SphericalPoint}, SHModes, j_range, ν_ind_range)
+
+	f = generatefitsheader(xobs1, xobs2, SHModes, j_range, ν_ind_range)
+
+	for (k, v, c) in zip(["r1p","th1p","phi1p","r2p","th2p","phi2p"],
+		Any[radius(xobs1′), Point2D(xobs1′)..., radius(xobs2′), Point2D(xobs2′)...],
+		["Radius of the first observation point rotated",
+		"Colatitude of the first observation point rotated",
+		"Azimuth of the first observation point rotated",
+		"Radius of the second observation point rotated",
+		"Colatitude of the second observation point rotated",
+		"Azimuth of the second observation point rotated"])
+
+		f[k] = v
+		set_comment!(f, k, c)
+	end
+
+	return f
 end
 
 function modetag(j_range, SHModes)
@@ -970,7 +1308,7 @@ function kernel_uₛₜ(comm, m::SeismicMeasurement, xobs1, xobs2,
 		xobs1, xobs2, los, SHModes, hω_arr, p_Gsrc, p_Gobs1, p_Gobs2, r_src)
 
 	K_δτ_uₛₜ === nothing  && return nothing
-	K = OffsetArray(K_δτ_uₛₜ, :, -1:1, :)
+	K = OffsetArray(K_δτ_uₛₜ, :, -1:1, ..)
 
 	if get(kwargs, :save, true)
 
@@ -983,7 +1321,7 @@ function kernel_uₛₜ(comm, m::SeismicMeasurement, xobs1, xobs2,
 		end
 	end
 
-	SHArray(K, (axes(K)[1:2]..., SHModes))
+	SHArray(K, (axes(K)[1:2]..., SHModes, axes(K)[4:end]...))
 end
 
 kernelfilenameuₛ₀rθϕ(::TravelTimes, ::los_radial) = "Kl0_δτ_u_rθϕ.fits"
@@ -1373,9 +1711,6 @@ function populatekernel!(::SoundSpeed, ::los_earth, K::StructArray{<:Complex}, S
 	return K
 end
 
-reinterpretSMatrix(A::AbstractArray{<:Any, 3}) = dropdims(reinterpret(SMatrix{2,2,eltype(A),4}, reshape(A, 4, size(A, 3))), dims = 1)
-reinterpretSMatrix(A::AbstractVector) = A
-
 function kernel_δcₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSplit,
 	xobs1::SphericalPoint, xobs2::SphericalPoint, los::los_direction, SHModes, hω_arr,
 	p_Gsrc::Union{Nothing, ParamsGfn} = nothing,
@@ -1415,8 +1750,8 @@ function kernel_δcₛₜ_partial(localtimer, ℓ_ωind_iter_on_proc::ProductSpl
 	H₂₁ = _structarrayparent(Hjₒjₛω_r₂r₁, HT)
 	H₁₂ = _structarrayparent(Hjₒjₛω_r₁r₂, HT)
 
-	tworealconjhωconjHjₒjₛω_r₂r₁S = reinterpretSMatrix(tworealconjhωconjHjₒjₛω_r₂r₁P)
-	tworealconjhωHjₒjₛω_r₁r₂S = reinterpretSMatrix(tworealconjhωHjₒjₛω_r₁r₂P)
+	tworealconjhωconjHjₒjₛω_r₂r₁S = reinterpretSMatrix(tworealconjhωconjHjₒjₛω_r₂r₁P, los)
+	tworealconjhωHjₒjₛω_r₁r₂S = reinterpretSMatrix(tworealconjhωHjₒjₛω_r₁r₂P, los)
 
 	ℓ_range_proc = UnitRange(extremaelement(ℓ_ωind_iter_on_proc, dims = 1)...)
 

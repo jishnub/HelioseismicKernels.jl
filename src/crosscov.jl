@@ -64,6 +64,13 @@ function read_parameters_for_points(xobs1::SphericalPoint, xobs2::SphericalPoint
 	p_Gobs2 = read_all_parameters(; kwargs..., r_src = radius(xobs2))
 	return p_Gsrc, p_Gobs1, p_Gobs2
 end
+function read_parameters_for_points((xobs1, xobs1′)::NTuple{2,SphericalPoint},
+	(xobs2, xobs2′)::NTuple{2,SphericalPoint}; kwargs...)
+	p_Gsrc = read_all_parameters(; kwargs...)
+	p_Gobs1 = read_all_parameters(; kwargs..., r_src = radius(xobs1))
+	p_Gobs2 = read_all_parameters(; kwargs..., r_src = radius(xobs2))
+	return p_Gsrc, p_Gobs1, p_Gobs2
+end
 
 function read_parameters_for_points(xobs1::Point3D, xobs2_arr::Vector{<:Point3D}; kwargs...)
 	p_Gsrc = read_all_parameters(; kwargs...)
@@ -997,7 +1004,7 @@ function allocatearrays(::SoundSpeed, los::los_direction, obs_at_same_height)
 		tworealconjhωHjₒjₛω_r₁r₂, tworealconjhωconjHjₒjₛω_r₂r₁)
 end
 
-function allocatearrays(::Flow, los::los_direction, obs_at_same_height)
+function allocatearrays(::Flow, los::los_direction, obs_at_same_height, _::Val{N} = Val(1)) where {N}
 	Gsrc = zeros(ComplexF64, 0:1, srcindG(los)..., nr)
 	drGsrc = zeros(ComplexF64, 0:1, srcindG(los)..., nr)
 	Gobs1 = zeros(ComplexF64, 0:1, srcindG(los)..., nr)
@@ -1028,8 +1035,13 @@ function allocatearrays(::Flow, los::los_direction, obs_at_same_height)
 	Hγℓjₒjₛ_r₁r₂ = StructArray{ComplexF64}((_H, zero(_H)));
 	Hγℓjₒjₛ_r₂r₁ = obs_at_same_height ? Hγℓjₒjₛ_r₁r₂ : zero(Hγℓjₒjₛ_r₁r₂);
 
-	twoimagconjhωHγℓjₒjₛ_r₁r₂ = zeros(obsindG(los)..., obsindG(los)..., nr, 0:1)
-	twoimagconjhωconjHγℓjₒjₛ_r₂r₁ = zeros(obsindG(los)..., obsindG(los)..., nr, 0:1)
+	if N === 1
+		twoimagconjhωHγℓjₒjₛ_r₁r₂ = zeros(obsindG(los)..., obsindG(los)..., nr, 0:1)
+		twoimagconjhωconjHγℓjₒjₛ_r₂r₁ = zeros(obsindG(los)..., obsindG(los)..., nr, 0:1)
+	else
+		twoimagconjhωHγℓjₒjₛ_r₁r₂ = zeros(obsindG(los)..., obsindG(los)..., N, nr, 0:1)
+		twoimagconjhωconjHγℓjₒjₛ_r₂r₁ = zeros(obsindG(los)..., obsindG(los)..., N, nr, 0:1)
+	end
 
 	# This is Gγℓjₒjₛ_r₁ for γ=1, used for the validation test
 	G¹₁jj_r₁ = zeros(ComplexF64, srcindG(los)..., nr)
@@ -1713,7 +1725,7 @@ function time_window_bounce_filter(Δϕ::Real, dt, bounce_no = 1)
 	return τ_low_ind,τ_high_ind
 end
 
-function time_window_indices_by_fitting_bounce_peak(C_t::AbstractVector{Float64},
+function time_window_indices_by_fitting_bounce_peak(C_t::AbstractVector{<:Real},
 	xobs1, xobs2; dt, bounce_no = 1, kwargs...)
 
 	τ_low_ind,τ_high_ind = time_window_bounce_filter(xobs1, xobs2, dt, bounce_no)
@@ -1722,7 +1734,7 @@ end
 
 hilbertenvelope(C_t, Nt = size(C_t, 1)) = abs.(hilbert(C_t[1:div(Nt, 2)]))
 
-function time_window_indices_by_fitting_bounce_peak(C_t::AbstractVector{Float64},
+function time_window_indices_by_fitting_bounce_peak(C_t::AbstractVector{<:Real},
 	τ_low_ind::Int64, τ_high_ind::Int64;
 	dt, Nt = size(C_t, 1), kwargs...)
 
@@ -1734,7 +1746,7 @@ function time_window_indices_by_fitting_bounce_peak(C_t::AbstractVector{Float64}
 	max(1, floor(Int64, t0 - 2σt)):min(ceil(Int64, t0 + 2σt), Nt)
 end
 
-function time_window_indices_by_fitting_bounce_peak(C_t::AbstractMatrix{Float64},
+function time_window_indices_by_fitting_bounce_peak(C_t::AbstractMatrix{<:Real},
 	xobs1, xobs2_arr::Vector, args...; kwargs...)
 
 	t_inds_range = Vector{UnitRange}(undef, size(C_t, 2))
@@ -1742,6 +1754,19 @@ function time_window_indices_by_fitting_bounce_peak(C_t::AbstractMatrix{Float64}
 		t_inds_range[x2ind] = time_window_indices_by_fitting_bounce_peak(C_t[:, x2ind],
 								xobs1, xobs2; kwargs...)
 	end
+	return t_inds_range
+end
+
+function time_window_indices_by_fitting_bounce_peak(C_t::AbstractMatrix{<:Real},
+	(xobs1, xobs1′)::NTuple{2,SphericalPoint},
+	(xobs2, xobs2′)::NTuple{2,SphericalPoint}, args...; kwargs...)
+
+	@assert size(C_t, 2) == 2 "function is only defined for two sets of points related by a rotation"
+	t_inds_range = Vector{UnitRange}(undef, size(C_t, 2))
+	t_inds_range[1] = time_window_indices_by_fitting_bounce_peak(C_t[:, 1],
+							xobs1, xobs2; kwargs...)
+	t_inds_range[2] = time_window_indices_by_fitting_bounce_peak(C_t[:, 2],
+							xobs1′, xobs2′; kwargs...)
 	return t_inds_range
 end
 

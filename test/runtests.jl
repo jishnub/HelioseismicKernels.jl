@@ -206,4 +206,9 @@ xobs2 = HelioseismicKernels.Point3D(r_obs, n2);
 			end
 		end
 	end;
+	@testset "rotated kernels" begin
+		K = HelioseismicKernels.kernel_uₛₜ(nothing, HelioseismicKernels.TravelTimes(), (n1, n1′), (n2, n2′), HelioseismicKernels.los_earth(), s_max = 1, t_max = 0, ℓ_range = 2:2);
+		K2 = HelioseismicKernels.kernel_uₛₜ(nothing, HelioseismicKernels.TravelTimes(), n1′, n2′, HelioseismicKernels.los_earth(), s_max = 1, t_max = 0, ℓ_range = 2:2);
+		@test view(K, :, :, :, 2) ≈ K2
+	end
 end;
