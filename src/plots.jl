@@ -4,6 +4,7 @@ using CSV
 using DataFrames
 using DelimitedFiles
 using Distributed
+using Interpolations
 using LaTeXStrings
 using LinearAlgebra
 using FFTW
@@ -2007,27 +2008,37 @@ end
 
 function plotruntime_flows_2()
 	radout = readdlm("kernel_radial224.out")
-	Tradlmax = Int.(radout[:,2])
-	Tradtime = Int.(radout[:,3])
+	Tradlmax = Int.(radout[2:end,2])
+	Tradtime = Int.(radout[2:end,3]) * 224 / 60^2
 
 	losout = readdlm("kernel_los224.out")
-	Tlosmax = Int.(losout[:,2])
-	Tlosime = Int.(losout[:,3])
+	Tlosmax = Int.(losout[2:end,2])
+	Tlostime = Int.(losout[2:end,3]) * 224 / 60^2
+
+	Δt_los_rad = Tlostime - Tradtime
+	perc_Δt_los_rad = Δt_los_rad ./ Tradtime
+	percentage_to_abs = LinearInterpolation(reverse(perc_Δt_los_rad), reverse(Δt_los_rad), extrapolation_bc = Line())
 
 	f, axlist = subplots(nrows = 2, ncols = 1)
-	axlist[1].semilogy(Tradlmax, Tradtime * 224 / 60^2, color= "black", label = "radial")
-	axlist[1].semilogy(Tlosmax, Tlosime * 224 / 60^2, color = "grey", marker = ".", ls = "dashed", label = "line-of-sight")
+	axlist[1].semilogy(Tradlmax, Tradtime, color= "black", label = "radial")
+	axlist[1].semilogy(Tlosmax, Tlostime, color = "grey", marker = ".", ls = "dashed", label = "line-of-sight")
 	axlist[1].legend(loc="best", fontsize = 11)
+	axlist[1].xaxis.set_major_formatter(ticker.NullFormatter())
 	axlist[1].yaxis.set_major_locator(ticker.LogLocator())
 	axlist[1].yaxis.set_major_formatter(ticker.ScalarFormatter())
-	axlist[1].set_ylabel("Computation time [hr]", fontsize = 11)
+	axlist[1].set_ylabel("Computation\n time [hr]", fontsize = 11)
 
-	axlist[2].plot(Tradlmax, (Tlosime - Tradtime) ./ Tradtime, color = "black", marker = ".")
+	axlist[2].plot(Tradlmax, perc_Δt_los_rad, color = "black", marker = ".")
 	axlist[2].set_ylabel("Difference", fontsize = 11)
 	axlist[2].set_xlabel("Maximum angular degree", fontsize = 11)
-	axlist[2].yaxis.set_major_locator(ticker.MaxNLocator(4))
 	axlist[2].yaxis.set_major_formatter(ticker.PercentFormatter(xmax = 1))
-	axlist[2].set_ylim(0, 1.1)
+	ax2_2 = axlist[2].twinx()
+	ax2_2.plot(Tradlmax, perc_Δt_los_rad, color = "black", marker = ".")
+	ax2_2.yaxis.set_major_locator(ticker.LinearLocator(4))
+	axlist[2].yaxis.set_major_locator(ticker.LinearLocator(4))
+	yt = axlist[2].get_yticks()
+	ax2_2.set_yticklabels(round.(Int, percentage_to_abs.(yt)))
+	ax2_2.set_ylabel("Hours", fontsize = 11)
 
 	f.subplots_adjust(hspace = 0)
 	f.set_size_inches(4,4)
