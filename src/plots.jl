@@ -1735,57 +1735,39 @@ function plot_kernel_with_and_without_los_sameheight(args...;kwargs...)
 	tight_layout()
 end
 
-function plot_Ku_compare_eulerrotation(;kwargs...)
-	eulerangles = get(kwargs,:eulerangles, nothing)
-	SHModes = get(kwargs,:SHModes,LM(1:1,1:1))
-	j_range = get(kwargs,:ℓ_range,5:80)
-	lmax, mmax = maximum(l_range(SHModes)), maximum(m_range(SHModes))
-
-	Krotnfile = HelioseismicKernels.kernelfilenameuₛₜ(HelioseismicKernels.TravelTimes(),
-		HelioseismicKernels.los_radial(),j_range,SHModes,"_rot")
-	Kn′file = HelioseismicKernels.kernelfilenameuₛₜ(HelioseismicKernels.TravelTimes(),
-		HelioseismicKernels.los_radial(),j_range,SHModes)
-
-	Knrot = FITS(joinpath(SCRATCH_kerneldir[], Krotnfile),"r") do f
-		K = reinterpret(ComplexF64, read(f[1]))
-		OffsetArray(K, :, -1:1, :)
-	end
-	Kn′ = FITS(joinpath(SCRATCH_kerneldir[], Kn′file),"r") do f
-		K = reinterpret(ComplexF64, read(f[1]))
-		OffsetArray(K, :, -1:1, :)
-	end
-
-	r_frac_bot_cutoff = 0.97
-	r_bot_cutoffind = searchsortedfirst(r_frac,r_frac_bot_cutoff)
-	r_frac_top_cutoff = 1 + 100e5/Rsun # 100 km above
-	r_top_cutoffind = searchsortedfirst(r_frac,r_frac_top_cutoff)
-	r_inds_range = r_bot_cutoffind:r_top_cutoffind
-	modeind = modeindex(SHModes, (1,1))
-
-	fig, ax = subplots(nrows=1, ncols=1)
-
-	ax.plot(r_frac[r_inds_range],
-		real(Kn′[r_inds_range, -1, modeind]),color="black",
-		ls="solid",label="direct")
-
-	ax.plot(r_frac[r_inds_range],
-		real(Knrot[r_inds_range, -1, modeind]),color="0.2",
-		ls="None",marker="o",ms="5",markevery=10,label="rotated")
-
-	xlabel(L"r/R_\odot",fontsize=12)
-	ylabel(L"\Re\left[K_{11}\right]",fontsize=12)
-
-	legend(loc="best", fontsize=12)
-
+function plot_Ku_rotatedpoints(;kwargs...)
+	f1 = joinpath(SCRATCH_kerneldir[], "Kst_δτ_u_jmax100_lmax1_mmax0_los_twopoints.fits")
+	f2 = joinpath(SCRATCH_kerneldir[], "Kst_δτ_u_jmax100_lmax1_mmax0_los.fits")
+	header = FITSIO.read_header(f1)
+	lmin = header["L_MIN"]::Int
+	lmax = header["L_MAX"]::Int
+	mmin = header["M_MIN"]::Int
+	mmax = header["M_MAX"]::Int
+	SHModes = LM(lmin:lmax, mmin:mmax)
+	K1 = reinterpret(ComplexF64, FITSIO.fitsread(f1, 1, :, :, modeindex(SHModes, (1,0)), 2))
+	K2 = reinterpret(ComplexF64, FITSIO.fitsread(f2, 1, :, :, modeindex(SHModes, (1,0))))
+	f, ax = subplots(nrows = 1, ncols = 1)
+	ax.plot(r_frac, -2imag(K1[:,3]), color = "grey")
+	ax.plot(r_frac, -2imag(K2[:,3]), marker = ".", color = "black", ls = "None", markevery = 20)
+	xlim(0.5, 1.01)
+	xlabel(L"r/R_\odot", fontsize = 11)
+	ylabel(L"\Im\left[K^{1}_{10}\left(r\right)\right] " * L"\left[s^2/cm^4\right]", fontsize = 11)
+	mf = ticker.ScalarFormatter(useMathText=true)
+	mf.set_powerlimits((-2,2))
 	ax.xaxis.set_major_locator(ticker.MaxNLocator(4))
-	ax.yaxis.set_major_locator(ticker.MaxNLocator(4))
-
-	fig.set_size_inches(4,3)
-	tight_layout()
-
-	replace_yaxis_offsettext(ax)
-
-	savefig(joinpath(SCRATCH[],"Kulm_rotated.eps"))
+	ax.yaxis.set_major_locator(ticker.MaxNLocator(3))
+	ax.yaxis.set_major_formatter(mf)
+	ax2 = ax.inset_axes([0.15, 0.18, 0.6, 0.5])
+	ax2.plot(r_frac, -2imag(K1[:,3]), color = "grey")
+	ax2.plot(r_frac, -2imag(K2[:,3]), marker = ".", color = "black", ls = "None", markevery = 20)
+	ax2.set_xlim(0.96, 1.003)
+	ax2.xaxis.set_major_locator(ticker.MaxNLocator(3))
+	ax2.yaxis.set_major_locator(ticker.MaxNLocator(3))
+	ax2.yaxis.set_major_formatter(mf)
+	ax.indicate_inset_zoom(ax2)
+	f.set_size_inches(4.5,3.2)
+	f.tight_layout()
+	f.savefig("plots/K_n1n2_los_direct_rotated.eps")
 end
 
 function plot_Kl0_rθ()
@@ -2085,6 +2067,10 @@ function compare_radial_los_kernel(; s_max = 15)
 	axlist[1,ncols].legend(lg..., loc="best", fontsize = 11)
 	axlist[1,ncols].set_visible(true)
 	axlist[1,ncols].axis("off")
+
+	axl = f.add_subplot(111, frame_on=false)
+	tick_params(labelcolor="none", bottom=false, left = false)
+	axl.set_ylabel("Sensitivity kernel "* L"\left[s^2/cm^4\right]", fontsize = 11)
 
 	f.set_size_inches(8,5)
 	f.tight_layout()

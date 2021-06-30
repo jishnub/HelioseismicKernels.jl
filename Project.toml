@@ -1,7 +1,7 @@
 name = "HelioseismicKernels"
 uuid = "3a63082f-2cd8-4ac6-a757-0d154b5e16eb"
 authors = ["Jishnu Bhattacharya", "Center for Space Science", "New York University Abu Dhabi"]
-version = "0.1.0"
+version = "1.0.0"
 
 [deps]
 BipolarSphericalHarmonics = "e22a7426-82a6-487a-9ac6-2ced2976a2d6"
@@ -54,11 +54,12 @@ WignerD = "87c4ff3e-34df-11e9-37a7-516cea4e0402"
 WignerSymbols = "9f57e263-0b3d-5e2e-b1be-24f2bb48858b"
 
 [compat]
+BipolarSphericalHarmonics = "0.1"
 CSV = "0.5"
 DSP = "0.6"
 DataFrames = "0.20"
 DistributedArrays = "0.6"
-EllipsisNotation = "0.4"
+EllipsisNotation = "0.4, 1"
 FFTW = "1.1"
 FITSIO = "0.16"
 FastGaussQuadrature = "0.4"
@@ -86,7 +87,7 @@ StructArrays = "0.4"
 TimerOutputs = "0.5"
 UnPack = "1"
 WignerD = "0.1"
-WignerSymbols = "1"
+WignerSymbols = "1, 2"
 julia = "1.2"
 
 [extras]

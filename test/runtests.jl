@@ -24,19 +24,23 @@ xobs2 = HelioseismicKernels.Point3D(r_obs, n2);
 		@test C[:,2] ≈ C2
 	end
 	@testset "rotated biposh flipped" begin
-		SHModes = LM(0:10, 0:10)
-		jₒjₛ_allmodes = L2L1Triangle(1:4, 3, 1:4)
-		Y12, Y21, Y1′2′, Y2′1′ = HelioseismicKernels.los_projected_spheroidal_biposh_flippoints(
-			(n1, n1′), (n2, n2′), HelioseismicKernels.los_earth(), SHModes, jₒjₛ_allmodes);
-		Y12_2, Y21_2 = HelioseismicKernels.los_projected_spheroidal_biposh_flippoints(
-			n1, n2, HelioseismicKernels.los_earth(), SHModes, jₒjₛ_allmodes);
-		Y1′2′_2, Y2′1′_2 = HelioseismicKernels.los_projected_spheroidal_biposh_flippoints(
-			n1′, n2′, HelioseismicKernels.los_earth(), SHModes, jₒjₛ_allmodes);
+		for los in Any[HelioseismicKernels.los_earth(), HelioseismicKernels.los_radial()]
+			@testset "$los" begin
+				SHModes = LM(0:10, 0:10)
+				jₒjₛ_allmodes = L2L1Triangle(1:4, 3, 1:4)
+				Y12, Y21, Y1′2′, Y2′1′ = HelioseismicKernels.los_projected_spheroidal_biposh_flippoints(
+					(n1, n1′), (n2, n2′), los, SHModes, jₒjₛ_allmodes);
+				Y12_2, Y21_2 = HelioseismicKernels.los_projected_spheroidal_biposh_flippoints(
+					n1, n2, los, SHModes, jₒjₛ_allmodes);
+				Y1′2′_2, Y2′1′_2 = HelioseismicKernels.los_projected_spheroidal_biposh_flippoints(
+					n1′, n2′, los, SHModes, jₒjₛ_allmodes);
 
-		@test all(all(isapprox(Y1[i], Y2[i], atol=1e-14, rtol=1e-8) for i in eachindex(Y1)) for (Y1,Y2) in zip(Y1′2′, Y1′2′_2))
-		@test all(all(isapprox(Y1[i], Y2[i], atol=1e-14, rtol=1e-8) for i in eachindex(Y1)) for (Y1,Y2) in zip(Y2′1′, Y2′1′_2))
-		@test all(all(isapprox(Y1[i], Y2[i], atol=1e-14, rtol=1e-8) for i in eachindex(Y1)) for (Y1,Y2) in zip(Y12, Y12_2))
-		@test all(all(isapprox(Y1[i], Y2[i], atol=1e-14, rtol=1e-8) for i in eachindex(Y1)) for (Y1,Y2) in zip(Y21, Y21_2))
+				@test all(all(isapprox(Y1[i], Y2[i], atol=1e-14, rtol=1e-8) for i in eachindex(Y1)) for (Y1,Y2) in zip(Y1′2′, Y1′2′_2))
+				@test all(all(isapprox(Y1[i], Y2[i], atol=1e-14, rtol=1e-8) for i in eachindex(Y1)) for (Y1,Y2) in zip(Y2′1′, Y2′1′_2))
+				@test all(all(isapprox(Y1[i], Y2[i], atol=1e-14, rtol=1e-8) for i in eachindex(Y1)) for (Y1,Y2) in zip(Y12, Y12_2))
+				@test all(all(isapprox(Y1[i], Y2[i], atol=1e-14, rtol=1e-8) for i in eachindex(Y1)) for (Y1,Y2) in zip(Y21, Y21_2))
+			end
+		end
 	end
 	@testset "kernel components" begin
 		@testset "SoundSpeed" begin
@@ -154,9 +158,9 @@ xobs2 = HelioseismicKernels.Point3D(r_obs, n2);
 				ℓ_range = 1:1
 				hω = HelioseismicKernels.hω(nothing, m, xobs1, xobs2, los; ℓ_range = ℓ_range)
 				K = HelioseismicKernels.kernel_ℑu⁺₁₀(nothing, m, n1, n2, los,ℓ_range = ℓ_range, hω = hω,
-					ν_ind_range = axes(hω, 1));
+					ν_ind_range = axes(hω, 1), save = false);
 				K2 = HelioseismicKernels.kernel_ℑu⁺₁₀(nothing, m, n1,[n2], los,ℓ_range = ℓ_range, hω = hω,
-					ν_ind_range = axes(hω, 1));
+					ν_ind_range = axes(hω, 1), save = false);
 				@test K ≈ K2
 			end
 
@@ -182,9 +186,9 @@ xobs2 = HelioseismicKernels.Point3D(r_obs, n2);
 				ℓ_range = 1:1
 				hω = HelioseismicKernels.hω(nothing, m, xobs1, xobs2, los; ℓ_range = ℓ_range)
 				K = HelioseismicKernels.kernel_δc₀₀(nothing, m, n1, n2, los, ℓ_range = ℓ_range, hω = hω,
-					ν_ind_range = axes(hω, 1));
+					ν_ind_range = axes(hω, 1), save = false);
 				K2 = HelioseismicKernels.kernel_δc₀₀(nothing, m, n1,[n2], los, ℓ_range = ℓ_range, hω = hω,
-					ν_ind_range = axes(hω, 1));
+					ν_ind_range = axes(hω, 1), save = false);
 				@test K ≈ K2
 			end
 
@@ -207,8 +211,12 @@ xobs2 = HelioseismicKernels.Point3D(r_obs, n2);
 		end
 	end;
 	@testset "rotated kernels" begin
-		K = HelioseismicKernels.kernel_uₛₜ(nothing, HelioseismicKernels.TravelTimes(), (n1, n1′), (n2, n2′), HelioseismicKernels.los_earth(), s_max = 1, t_max = 0, ℓ_range = 2:2);
-		K2 = HelioseismicKernels.kernel_uₛₜ(nothing, HelioseismicKernels.TravelTimes(), n1′, n2′, HelioseismicKernels.los_earth(), s_max = 1, t_max = 0, ℓ_range = 2:2);
-		@test view(K, :, :, :, 2) ≈ K2
-	end
+		for los in Any[HelioseismicKernels.los_earth(), HelioseismicKernels.los_radial()]
+			@testset "$los" begin
+				K = HelioseismicKernels.kernel_uₛₜ(nothing, HelioseismicKernels.TravelTimes(), (n1, n1′), (n2, n2′), los, s_max = 1, t_max = 0, ℓ_range = 2:2, save = false);
+				K2 = HelioseismicKernels.kernel_uₛₜ(nothing, HelioseismicKernels.TravelTimes(), n1′, n2′, los, s_max = 1, t_max = 0, ℓ_range = 2:2, save = false);
+				@test view(K, :, :, :, 2) ≈ K2
+			end
+		end
+	end;
 end;
