@@ -604,7 +604,7 @@ for f in (:Cω, :∂ϕ₂Cω, :Cω_∂ϕ₂Cω)
 
 		if get(kwargs, :save, false)
 			filepath = joinpath(SCRATCH_kerneldir[], filename)
-			FITSIO.fitswrite(filepath, C, header = C_FITS_header(xobs1, xobs2))
+			FITSIO.fitswrite(filepath, reinterpret_as_float(C), header = C_FITS_header(xobs1, xobs2))
 		end
 		return C
 	end
